@@ -20367,13 +20367,9 @@ public class ActivityManagerService extends IActivityManager.Stub
                 return;
             }
 
-            final boolean preserveTombstoneFreeze = mAppBackgroundModeController != null
-                    && mAppBackgroundModeController.shouldPreserveTombstoneFreeze(app);
             if (mAppBackgroundModeController != null
                     && mAppBackgroundModeController.isFullMode(app)) {
                 freezePolicy = false;
-            } else if (preserveTombstoneFreeze) {
-                freezePolicy = true;
             }
 
             // TODO: b/441879937 - Pass useFreezer() information to OomAdjuster and move the trace

@@ -183,10 +183,6 @@ final class AppBackgroundModeController {
         return getUidMode(app.getApplicationUid()) == AppBackgroundModeConfig.MODE_TOMBSTONE;
     }
 
-    boolean shouldPreserveTombstoneFreeze(@NonNull ProcessRecordInternal app) {
-        return isTombstoneMode(app);
-    }
-
     void onBinderActivity(int applicationUid, @NonNull String reason) {
         mHandler.post(() -> beginBinderProtection(applicationUid, reason));
     }
@@ -410,6 +406,8 @@ final class AppBackgroundModeController {
                         cancelBinderProtectionTimeout(uid);
                         if (previous.get(uid, AppBackgroundModeConfig.MODE_DEFAULT)
                                 == AppBackgroundModeConfig.MODE_TOMBSTONE) {
+                            mService.getCachedAppOptimizer()
+                                    .markTombstoneThawRecoveryForUidLSP(uid);
                         }
                         unfreezeUidLSP(uid, "mode changed");
                         if (!isBinderRecoveryPending(uid)) {
@@ -563,7 +561,11 @@ final class AppBackgroundModeController {
 
     private void onProtectionStarted(int uid, String reason) {
         cancelFreeze(uid);
-        mHandler.post(() -> unfreezeUid(uid, reason));
+        mHandler.post(() -> {
+            if (getUidMode(uid) == AppBackgroundModeConfig.MODE_TOMBSTONE) {
+                unfreezeUid(uid, reason);
+            }
+        });
     }
 
     private void onProtectionStopped(int uid, long delay, String reason) {
@@ -783,7 +785,9 @@ final class AppBackgroundModeController {
 
     private void unfreezeUidLSP(int uid, String reason) {
         for (ProcessRecord process : collectProcessesForUidLSP(uid)) {
-            if (process.isFrozen() || process.isPendingFreeze()) {
+            if (process.isFrozen() || process.isPendingFreeze()
+                    || mService.getCachedAppOptimizer()
+                            .hasPendingTombstoneRecoveryLSP(process)) {
                 mService.getCachedAppOptimizer().unfreezeAppLSP(process,
                         CachedAppOptimizer.UNFREEZE_REASON_UI_VISIBILITY, true);
                 Slog.i(TAG, "Unfroze uid=" + uid + " pid=" + process.getPid()
