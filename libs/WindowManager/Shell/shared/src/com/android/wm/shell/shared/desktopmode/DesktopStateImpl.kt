@@ -20,6 +20,7 @@ import android.content.Context
 import android.content.pm.PackageManager.FEATURE_FREEFORM_WINDOW_MANAGEMENT
 import android.hardware.display.DisplayManager
 import android.os.SystemProperties
+import android.os.UserHandle
 import android.provider.Settings
 import android.view.Display
 import android.view.WindowManager
@@ -31,7 +32,7 @@ import com.android.window.flags.Flags
 import com.android.wm.shell.shared.bubbles.BubbleFlagHelper
 
 @VisibleForTesting(visibility = VisibleForTesting.Visibility.PACKAGE)
-class DesktopStateImpl(context: Context) : DesktopState {
+class DesktopStateImpl(private val context: Context) : DesktopState {
 
     private val windowManager = context.getSystemService(WindowManager::class.java)
     private val displayManager = context.getSystemService(DisplayManager::class.java)
@@ -65,15 +66,28 @@ class DesktopStateImpl(context: Context) : DesktopState {
     private val isDesktopModeEnabledByDevOption =
         DesktopModeFlags.isDesktopModeForcedEnabled() && canShowDesktopModeDevOption
 
-    override val canEnterDesktopMode: Boolean = run {
-        val isEligibleForDesktopMode =
-            isDeviceEligibleForDesktopMode &&
-                (DesktopExperienceFlags.ENABLE_PROJECTED_DISPLAY_DESKTOP_MODE.isTrue ||
-                    canInternalDisplayHostDesktops)
-        val desktopModeEnabled =
-            isEligibleForDesktopMode && DesktopModeFlags.ENABLE_DESKTOP_WINDOWING_MODE.isTrue
-        desktopModeEnabled || isDesktopModeEnabledByDevOption
-    }
+    private val isExternalDesktopModeEnabled: Boolean
+        get() =
+            Settings.Secure.getIntForUser(
+                context.contentResolver,
+                Settings.Secure.UWU_EXTERNAL_DESKTOP_ENABLED,
+                0,
+                UserHandle.USER_CURRENT,
+            ) != 0
+
+    override val canEnterDesktopMode: Boolean
+        get() {
+            if (isExternalDesktopModeEnabled) {
+                return DesktopModeFlags.ENABLE_DESKTOP_WINDOWING_MODE.isTrue
+            }
+            val isEligibleForDesktopMode =
+                isDeviceEligibleForDesktopMode &&
+                    (DesktopExperienceFlags.ENABLE_PROJECTED_DISPLAY_DESKTOP_MODE.isTrue ||
+                        canInternalDisplayHostDesktops)
+            val desktopModeEnabled =
+                isEligibleForDesktopMode && DesktopModeFlags.ENABLE_DESKTOP_WINDOWING_MODE.isTrue
+            return desktopModeEnabled || isDesktopModeEnabledByDevOption
+        }
 
     private val isDeviceEligibleForDesktopExperienceDevOption =
         !enforceDeviceRestrictions || isDesktopModeSupported || isDesktopModeDevOptionSupported
@@ -92,6 +106,7 @@ class DesktopStateImpl(context: Context) : DesktopState {
 
     override val isDeviceEligibleForDesktopMode: Boolean
         get() {
+            if (isExternalDesktopModeEnabled) return true
             if (!enforceDeviceRestrictions) return true
             val desktopModeSupportedByDevOptions =
                 Flags.enableDesktopModeThroughDevOption() && isDesktopModeDevOptionSupported
@@ -107,6 +122,9 @@ class DesktopStateImpl(context: Context) : DesktopState {
         if (!canEnterDesktopMode) return false
         if (!enforceDeviceRestrictions) return true
         if (display.type == Display.TYPE_INTERNAL) return canInternalDisplayHostDesktops
+        if (isExternalDesktopModeEnabled) {
+            return windowManager?.isEligibleForDesktopMode(display.displayId) ?: false
+        }
         if (!DesktopExperienceFlags.ENABLE_DISPLAY_CONTENT_MODE_MANAGEMENT.isTrue) return false
         return windowManager?.isEligibleForDesktopMode(display.displayId) ?: false
     }

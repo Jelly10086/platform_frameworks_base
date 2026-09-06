@@ -288,6 +288,7 @@ import java.util.HashMap;
 import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.Set;
 import java.util.function.Consumer;
@@ -6109,6 +6110,9 @@ class DisplayContent extends RootDisplayArea implements WindowManagerPolicy.Disp
             // This display is configured to show system decorations.
             return true;
         }
+        if (isUwuExternalDesktopDisplay()) {
+            return true;
+        }
         if (!DesktopExperienceFlags.ENABLE_DISPLAY_CONTENT_MODE_MANAGEMENT.isTrue()
                 && isPublicSecondaryDisplayWithDesktopModeForceEnabled()) {
             // System decorations should not be forced on a rear display due to security
@@ -6151,7 +6155,28 @@ class DisplayContent extends RootDisplayArea implements WindowManagerPolicy.Disp
         if (!isWindowingModeSupported(WINDOWING_MODE_FREEFORM)) {
             return false;
         }
-        return isDefaultDisplay || allowContentModeSwitch();
+        return isDefaultDisplay || allowContentModeSwitch() || isUwuExternalDesktopDisplay();
+    }
+
+    boolean isUwuExternalDesktopDisplay() {
+        if (!DesktopModeHelper.isExternalDesktopModeEnabled(mWmService.mContext)
+                || isDefaultDisplay || isPrivate() || !isTrusted()) {
+            return false;
+        }
+        final int type = mDisplay.getType();
+        final boolean isScrcpyVirtualDisplay = type == Display.TYPE_VIRTUAL
+                && mDisplay.getName().toLowerCase(Locale.ROOT).contains("scrcpy");
+        if (isScrcpyVirtualDisplay
+                && !DesktopModeHelper.isScrcpyVirtualDisplayAllowed(mWmService.mContext)) {
+            return false;
+        }
+        return type == Display.TYPE_EXTERNAL
+                || type == Display.TYPE_WIFI
+                || type == Display.TYPE_OVERLAY
+                || (type == Display.TYPE_VIRTUAL
+                        && ((mDisplay.getFlags() & FLAG_SHOULD_SHOW_SYSTEM_DECORATIONS) != 0
+                                || (mDisplay.getFlags() & Display.FLAG_PRESENTATION) != 0
+                                || isScrcpyVirtualDisplay));
     }
 
     /**

@@ -14,4 +14,7 @@
     <string name="uwu_sms_code_fill_in">"填入"</string>
     <string name="uwu_music_suggestion_chip_content_description">打开所选音乐应用</string>
     <string name="uwu_torch_suggestion_chip_content_description">关闭手电筒</string>
+    <string name="uwu_external_desktop_connected_title">已连接到外接显示器</string>
+    <string name="uwu_external_desktop_connected_message">拔出接口以退出</string>
+    <string name="uwu_external_desktop_connected_accessibility">已连接到外接显示器。拔出接口以退出。</string>
 </resources>

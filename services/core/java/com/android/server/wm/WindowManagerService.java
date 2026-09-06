@@ -866,6 +866,10 @@ public class WindowManagerService extends IWindowManager.Stub
                 Settings.Global.MAXIMUM_OBSCURING_OPACITY_FOR_TOUCH);
         private final Uri mDevelopmentOverrideDesktopExperienceUri = Settings.Global.getUriFor(
                 Settings.Global.DEVELOPMENT_OVERRIDE_DESKTOP_EXPERIENCE_FEATURES);
+        private final Uri mUwuExternalDesktopEnabledUri = Settings.Secure.getUriFor(
+                Settings.Secure.UWU_EXTERNAL_DESKTOP_ENABLED);
+        private final Uri mUwuExternalDesktopAllowScrcpyUri = Settings.Secure.getUriFor(
+                Settings.Secure.UWU_EXTERNAL_DESKTOP_ALLOW_SCRCPY_VIRTUAL_DISPLAY);
 
         public SettingsObserver() {
             super(new Handler());
@@ -903,6 +907,10 @@ public class WindowManagerService extends IWindowManager.Stub
             resolver.registerContentObserver(mMaximumObscuringOpacityForTouchUri, false, this,
                     UserHandle.USER_ALL);
             resolver.registerContentObserver(mDevelopmentOverrideDesktopExperienceUri, false, this,
+                    UserHandle.USER_ALL);
+            resolver.registerContentObserver(mUwuExternalDesktopEnabledUri, false, this,
+                    UserHandle.USER_ALL);
+            resolver.registerContentObserver(mUwuExternalDesktopAllowScrcpyUri, false, this,
                     UserHandle.USER_ALL);
         }
 
@@ -958,6 +966,15 @@ public class WindowManagerService extends IWindowManager.Stub
 
             if (mDevelopmentOverrideDesktopExperienceUri.equals(uri)) {
                 updateDevelopmentOverrideDesktopExperience();
+                return;
+            }
+
+            if (mUwuExternalDesktopEnabledUri.equals(uri)
+                    || mUwuExternalDesktopAllowScrcpyUri.equals(uri)) {
+                updateFreeformWindowManagement();
+                synchronized (mGlobalLock) {
+                    mRoot.onSettingsRetrieved();
+                }
                 return;
             }
 
@@ -1019,7 +1036,8 @@ public class WindowManagerService extends IWindowManager.Stub
             ContentResolver resolver = mContext.getContentResolver();
             final boolean freeformWindowManagement = mContext.getPackageManager().hasSystemFeature(
                     FEATURE_FREEFORM_WINDOW_MANAGEMENT) || Settings.Global.getInt(
-                    resolver, DEVELOPMENT_ENABLE_FREEFORM_WINDOWS_SUPPORT, 0) != 0;
+                    resolver, DEVELOPMENT_ENABLE_FREEFORM_WINDOWS_SUPPORT, 0) != 0
+                    || DesktopModeHelper.isExternalDesktopModeEnabled(mContext);
 
             if (mAtmService.mSupportsFreeformWindowManagement != freeformWindowManagement) {
                 mAtmService.mSupportsFreeformWindowManagement = freeformWindowManagement;

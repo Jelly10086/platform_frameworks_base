@@ -25,6 +25,8 @@ import android.annotation.Nullable;
 import android.content.Context;
 import android.hardware.display.DisplayManager;
 import android.os.SystemProperties;
+import android.os.UserHandle;
+import android.provider.Settings;
 import android.view.Display;
 import android.view.WindowManager;
 import android.window.DesktopExperienceFlags;
@@ -133,6 +135,9 @@ public class DesktopModeStatus {
      * Return {@code true} if desktop mode is enabled and can be entered on the current device.
      */
     public static boolean canEnterDesktopMode(@NonNull Context context) {
+        if (isExternalDesktopModeEnabled(context)) {
+            return DesktopModeFlags.ENABLE_DESKTOP_WINDOWING_MODE.isTrue();
+        }
         boolean isEligibleForDesktopMode = isDeviceEligibleForDesktopMode(context) && (
                 DesktopExperienceFlags.ENABLE_PROJECTED_DISPLAY_DESKTOP_MODE.isTrue()
                         || canInternalDisplayHostDesktops(context));
@@ -164,6 +169,11 @@ public class DesktopModeStatus {
             return canInternalDisplayHostDesktops(context);
         }
 
+        if (isExternalDesktopModeEnabled(context)) {
+            final WindowManager wm = context.getSystemService(WindowManager.class);
+            return wm != null && wm.isEligibleForDesktopMode(display.getDisplayId());
+        }
+
         // TODO (b/395014779): Change this to use WM API
         if (!DesktopExperienceFlags.ENABLE_DISPLAY_CONTENT_MODE_MANAGEMENT.isTrue()) {
             return false;
@@ -193,6 +203,9 @@ public class DesktopModeStatus {
      * Return {@code true} if desktop mode is unrestricted and is supported on the device.
      */
     public static boolean isDeviceEligibleForDesktopMode(@NonNull Context context) {
+        if (isExternalDesktopModeEnabled(context)) {
+            return true;
+        }
         if (!enforceDeviceRestrictions()) {
             return true;
         }
@@ -200,6 +213,11 @@ public class DesktopModeStatus {
                 Flags.enableDesktopModeThroughDevOption()
                     && isDesktopModeDevOptionSupported(context);
         return isDesktopModeSupported(context) || desktopModeSupportedByDevOptions;
+    }
+
+    private static boolean isExternalDesktopModeEnabled(@NonNull Context context) {
+        return Settings.Secure.getIntForUser(context.getContentResolver(),
+                Settings.Secure.UWU_EXTERNAL_DESKTOP_ENABLED, 0, UserHandle.USER_CURRENT) != 0;
     }
 
     /**

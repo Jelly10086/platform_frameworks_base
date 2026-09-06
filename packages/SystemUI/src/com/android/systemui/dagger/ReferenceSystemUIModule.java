@@ -39,6 +39,7 @@ import com.android.systemui.display.dagger.ReferenceSysUIDisplaySubcomponent;
 import com.android.systemui.display.dagger.SystemUIDisplaySubcomponent;
 import com.android.systemui.display.data.repository.DisplayPhoneModule;
 import com.android.systemui.display.ui.viewmodel.ConnectingDisplayViewModel;
+import com.android.systemui.externaldesktop.ExternalDesktopModule;
 import com.android.systemui.dock.DockManager;
 import com.android.systemui.dock.DockManagerImpl;
 import com.android.systemui.doze.DozeHost;
@@ -148,6 +149,7 @@ import javax.inject.Provider;
         ImeSwitcherMenuModule.class,
         DisplayPhoneModule.class,
         EmergencyGestureModule.class,
+        ExternalDesktopModule.class,
         GestureModule.class,
         HeadsUpModule.class,
         KeyguardModule.class,

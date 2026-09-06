@@ -18,6 +18,7 @@ package com.android.systemui.display.ui.viewmodel
 import android.app.Dialog
 import android.content.Context
 import android.os.SystemProperties
+import android.provider.Settings
 import android.provider.Settings.Secure.MIRROR_BUILT_IN_DISPLAY
 import android.util.Log
 import android.view.Display.DEFAULT_DISPLAY
@@ -52,6 +53,7 @@ import com.android.systemui.statusbar.phone.SystemUIDialogFactory
 import com.android.systemui.statusbar.phone.createBottomSheet
 import com.android.systemui.statusbar.policy.AccessibilityManagerWrapper
 import com.android.systemui.util.settings.SecureSettings
+import com.android.systemui.util.settings.SettingsProxyExt.observerFlow
 import com.android.wm.shell.shared.desktopmode.DesktopState
 import dagger.Binds
 import dagger.Module
@@ -66,7 +68,9 @@ import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.withContext
 
 /**
@@ -103,6 +107,11 @@ constructor(
         val kioskModeFlow = kioskModeRepository.isInKioskMode
         val concurrentDisplaysInProgressFlow =
             connectedDisplayInteractor.concurrentDisplaysInProgress
+        val externalDesktopEnabledFlow =
+            secureSettings
+                .observerFlow(Settings.Secure.UWU_EXTERNAL_DESKTOP_ENABLED)
+                .onStart { emit(Unit) }
+                .map { isUwuExternalDesktopEnabled() }
 
         // Listen for display disconnect events and send an a11y event when necessary
         disconnectFlow
@@ -117,10 +126,13 @@ constructor(
         //   connected while on the lockscreen).
         val debouncedPendingDisplayFlow = pendingDisplayFlow.debounce(200.milliseconds)
 
-        combine(debouncedPendingDisplayFlow, kioskModeFlow, concurrentDisplaysInProgressFlow) {
-                pendingDisplay,
-                isInKioskMode,
-                concurrentDisplaysInProgress ->
+        combine(
+                debouncedPendingDisplayFlow,
+                kioskModeFlow,
+                concurrentDisplaysInProgressFlow,
+                externalDesktopEnabledFlow,
+            ) { pendingDisplay, isInKioskMode, concurrentDisplaysInProgress, externalDesktopEnabled
+                ->
                 if (pendingDisplay == null) {
                     dismissDialog()
                 } else {
@@ -128,6 +140,7 @@ constructor(
                         pendingDisplay,
                         isInKioskMode,
                         concurrentDisplaysInProgress,
+                        externalDesktopEnabled,
                     )
                 }
             }
@@ -205,6 +218,7 @@ constructor(
         pendingDisplay: PendingDisplay,
         isInKioskMode: Boolean,
         concurrentDisplaysInProgress: Boolean,
+        externalDesktopEnabled: Boolean,
     ) {
         val isInExtendedMode = desktopState.isDesktopModeSupportedOnDisplay(DEFAULT_DISPLAY)
 
@@ -219,6 +233,10 @@ constructor(
                     isInKioskMode = true,
                     isDesktopModeSupported = desktopState.canEnterDesktopMode,
                 )
+            }
+            externalDesktopEnabled -> {
+                pendingDisplay.enableForDesktop()
+                handleA11y(isConnected = true)
             }
             isInExtendedMode -> {
                 pendingDisplay.enableForDesktop()
@@ -283,6 +301,9 @@ constructor(
             if (currentVal == newVal) return@withContext true
             return@withContext secureSettings.putInt(MIRROR_BUILT_IN_DISPLAY, newVal)
         }
+
+    private fun isUwuExternalDesktopEnabled() =
+        secureSettings.getInt(Settings.Secure.UWU_EXTERNAL_DESKTOP_ENABLED, 0) != 0
 
     private fun dismissDialog() {
         dialog?.dismiss()

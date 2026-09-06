@@ -14721,6 +14721,34 @@ public final class Settings {
                 "status_bar_lyric_allowed_packages";
 
         /**
+         * Whether connected external displays use the system desktop experience.
+         *
+         * @hide
+         */
+        @Readable
+        public static final String UWU_EXTERNAL_DESKTOP_ENABLED =
+                "uwu_external_desktop_enabled";
+
+        /**
+         * Whether the built-in display is covered while an external desktop is connected.
+         *
+         * @hide
+         */
+        @Readable
+        public static final String UWU_EXTERNAL_DESKTOP_BLANK_INTERNAL_DISPLAY =
+                "uwu_external_desktop_blank_internal_display";
+
+        /**
+         * Whether scrcpy-created virtual displays may start the external desktop experience.
+         * Ordinary display-0 mirroring is unaffected.
+         *
+         * @hide
+         */
+        @Readable
+        public static final String UWU_EXTERNAL_DESKTOP_ALLOW_SCRCPY_VIRTUAL_DISPLAY =
+                "uwu_external_desktop_allow_scrcpy_virtual_display";
+
+        /**
          * Integer property which determines whether advanced protection is on or not.
          * @hide
          */

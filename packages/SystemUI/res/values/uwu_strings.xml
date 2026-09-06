@@ -17,4 +17,7 @@
     <string name="uwu_sms_code_fill_in">Fill in</string>
     <string name="uwu_music_suggestion_chip_content_description">Open selected music app</string>
     <string name="uwu_torch_suggestion_chip_content_description">Turn off flashlight</string>
+    <string name="uwu_external_desktop_connected_title">Connected to external display</string>
+    <string name="uwu_external_desktop_connected_message">Disconnect the cable to exit</string>
+    <string name="uwu_external_desktop_connected_accessibility">Connected to external display. Disconnect the cable to exit.</string>
 </resources>

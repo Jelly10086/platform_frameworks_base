@@ -26,7 +26,9 @@
         <permission name="android.permission.STATUS_BAR"/>
         <permission name="android.permission.STOP_APP_SWITCHES"/>
         <permission name="android.permission.ACCESS_SHORTCUTS"/>
+        <permission name="android.permission.ACCESS_CONTEXTUAL_SEARCH"/>
         <permission name="android.permission.ACCESS_HIDDEN_PROFILES_FULL"/>
+        <permission name="android.permission.READ_WALLPAPER_INTERNAL"/>
         <permission name="android.permission.READ_REMOTE_TASKS"/>
         <permission name="android.permission.REQUEST_TASK_HANDOFF"/>
         <!-- Permissions for showing personal context results in cue bar -->
