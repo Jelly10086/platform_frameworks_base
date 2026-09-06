@@ -18088,9 +18088,10 @@ public class ActivityManagerService extends IActivityManager.Stub
                     final ProcessRecord pr = (ProcessRecord) wpc.mOwner;
                     if (mAppBackgroundModeController != null
                             && mAppBackgroundModeController.shouldIgnoreTaskRemoval(pr)) {
-                        Slog.i(AppBackgroundModeController.TAG,
+                        AppBackgroundModeController.logInfo(
                                 "Ignoring task-removal kill uid=" + pr.getApplicationUid()
-                                        + " process=" + pr.processName);
+                                        + " process=" + pr.processName
+                                        + " mode=managed");
                         continue;
                     }
                     if (ActivityManager.isProcStateBackground(pr.getSetProcState())

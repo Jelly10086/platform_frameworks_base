@@ -1077,6 +1077,11 @@ public class CachedAppOptimizer {
         }
 
         final boolean useFreezer = mUseFreezer;
+        final AppBackgroundModeController backgroundModeController =
+                mAm.mAppBackgroundModeController;
+        if (backgroundModeController != null) {
+            backgroundModeController.onFreezerAvailabilityChanged();
+        }
         // enableFreezer() would need the global ActivityManagerService lock, post it.
         mAm.mHandler.post(() -> {
             if (useFreezer) {
@@ -1518,9 +1523,10 @@ public class CachedAppOptimizer {
             if ((freezeInfo & SYNC_RECEIVED_WHILE_FROZEN) != 0) {
                 if (handleTombstoneBinderActivity(app, "sync transaction while frozen")) {
                     tombstoneBinderActivity = true;
-                    Slog.i(AppBackgroundModeController.TAG,
-                            "Recovering UID after sync binder uid="
-                                    + app.getApplicationUid() + " pid=" + pid);
+                    AppBackgroundModeController.logWarning(
+                            "Recovering UID after synchronous Binder traffic uid="
+                                    + app.getApplicationUid() + " pid=" + pid
+                                    + " binder=sync-received-while-frozen");
                 } else {
                     Slog.d(TAG_AM, "pid " + pid + " " + app.processName
                             + " received sync transactions while frozen, killing");
@@ -1538,8 +1544,10 @@ public class CachedAppOptimizer {
         } catch (Exception e) {
             if (handleTombstoneBinderActivity(app, "binder state query failed")) {
                 tombstoneBinderActivity = true;
-                Slog.e(TAG_AM, "Unable to query binder frozen info for tombstone pid " + pid
-                        + " " + app.processName + "; attempting UID recovery", e);
+                AppBackgroundModeController.logError(
+                        "Unable to query Binder freeze state uid=" + app.getApplicationUid()
+                                + " pid=" + pid + " process=" + app.processName
+                                + "; attempting UID recovery", e);
             } else {
                 Slog.d(TAG_AM, "Unable to query binder frozen info for pid " + pid + " "
                         + app.processName + ". Killing it. Exception: " + e);
@@ -1563,8 +1571,10 @@ public class CachedAppOptimizer {
             mFreezer.freezeBinder(pid, false, FREEZE_BINDER_TIMEOUT_MS);
         } catch (RuntimeException e) {
             if (handleTombstoneBinderRecoveryFailure(app, "binder unfreeze failed")) {
-                Slog.e(TAG_AM, "Unable to unfreeze binder for tombstone pid " + pid + " "
-                        + app.processName + "; leaving it frozen and recovering its UID", e);
+                AppBackgroundModeController.logError(
+                        "Unable to thaw Binder uid=" + app.getApplicationUid()
+                                + " pid=" + pid + " process=" + app.processName
+                                + "; leaving process frozen for UID recovery", e);
                 requestTombstoneUidRecoveryLSP(app.getApplicationUid(), pid);
                 return false;
             } else {
@@ -1595,6 +1605,10 @@ public class CachedAppOptimizer {
             Slog.e(TAG_AM, "Unable to unfreeze " + pid + " " + app.processName
                     + ". This might cause inconsistency or UI hangs.");
             if (handleTombstoneBinderRecoveryFailure(app, "cgroup unfreeze failed")) {
+                AppBackgroundModeController.logError(
+                        "Unable to thaw cgroup uid=" + app.getApplicationUid()
+                                + " pid=" + pid + " process=" + app.processName
+                                + "; scheduling UID recovery", e);
                 requestTombstoneUidRecoveryLSP(app.getApplicationUid(), 0);
             }
         }
@@ -2674,8 +2688,10 @@ public class CachedAppOptimizer {
                     }
                 } catch (RuntimeException e) {
                     if (recoverTombstoneUidLSP(proc, "binder freeze failed")) {
-                        Slog.e(TAG_AM, "Unable to freeze binder for tombstone pid " + pid + " "
-                                + name + "; recovering UID", e);
+                        AppBackgroundModeController.logError(
+                                "Unable to freeze Binder uid=" + proc.getApplicationUid()
+                                        + " pid=" + pid + " process=" + name
+                                        + "; recovering UID", e);
                         return;
                     } else {
                         Slog.e(TAG_AM, "Unable to freeze binder for " + pid + " " + name);
@@ -2706,8 +2722,23 @@ public class CachedAppOptimizer {
                     opt.setHasCollectedFrozenPSS(false);
                     mFrozenProcesses.put(pid, proc);
                     mAm.mProcessStateController.setFrozenProcessCount(mFrozenProcesses.size());
+                    if (tombstoneFreeze) {
+                        AppBackgroundModeController.logInfo(
+                                "Freeze complete uid=" + proc.getApplicationUid()
+                                        + " pid=" + pid + " process=" + name
+                                        + " backend="
+                                        + backgroundModeController.describeFreezerBackend(proc)
+                                        + " binder=frozen cgroup=frozen");
+                    }
                 } catch (Exception e) {
                     Slog.w(TAG_AM, "Unable to freeze " + pid + " " + name);
+                    if (tombstoneFreeze) {
+                        AppBackgroundModeController.logError(
+                                "Unable to freeze cgroup uid=" + proc.getApplicationUid()
+                                        + " pid=" + pid + " process=" + name
+                                        + " backend="
+                                        + backgroundModeController.describeFreezerBackend(proc), e);
+                    }
                     boolean binderRollbackFailed = false;
                     try {
                         mFreezer.freezeBinder(pid, false, FREEZE_BINDER_TIMEOUT_MS);
@@ -2780,8 +2811,10 @@ public class CachedAppOptimizer {
             } catch (RuntimeException e) {
                 synchronized (mProcLock) {
                     if (recoverTombstoneUidLSP(proc, "binder post-freeze query failed")) {
-                        Slog.e(TAG_AM, "Unable to query frozen binder for tombstone pid " + pid
-                                + " " + name + "; recovering UID", e);
+                        AppBackgroundModeController.logError(
+                                "Unable to verify Binder freeze state uid="
+                                        + proc.getApplicationUid() + " pid=" + pid
+                                        + " process=" + name + "; recovering UID", e);
                         return;
                     }
                 }
@@ -3117,12 +3150,13 @@ public class CachedAppOptimizer {
             mFreezer.freezeBinder(pid, false, FREEZE_BINDER_TIMEOUT_MS);
             mTombstoneBinderRecoveryProcesses.delete(pid);
             mTombstoneThawRecoveryProcesses.delete(pid);
-            Slog.i(AppBackgroundModeController.TAG,
-                    "Recovered binder-only freeze uid=" + app.getApplicationUid()
-                            + " pid=" + pid);
+            AppBackgroundModeController.logInfo(
+                    "Recovered Binder-only freeze uid=" + app.getApplicationUid()
+                            + " pid=" + pid + " binder=thawed cgroup=not-frozen");
         } catch (RuntimeException e) {
-            Slog.e(TAG_AM, "Unable to recover binder-only tombstone pid " + pid + " "
-                    + app.processName, e);
+            AppBackgroundModeController.logError(
+                    "Unable to recover Binder-only freeze uid=" + app.getApplicationUid()
+                            + " pid=" + pid + " process=" + app.processName, e);
             handleTombstoneBinderRecoveryFailure(app, "binder-only recovery failed");
         }
     }
@@ -3172,9 +3206,9 @@ public class CachedAppOptimizer {
                 continue;
             }
             unfreezeAppLSP(process, UNFREEZE_REASON_BINDER_TXNS, true);
-            Slog.i(AppBackgroundModeController.TAG,
+            AppBackgroundModeController.logInfo(
                     "Binder recovery uid=" + applicationUid + " pid=" + process.getPid()
-                            + " reason=" + reason);
+                            + " process=" + process.processName + " reason=" + reason);
         }
     }
 

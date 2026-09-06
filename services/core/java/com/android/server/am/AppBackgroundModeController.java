@@ -34,6 +34,7 @@ import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.database.ContentObserver;
 import android.net.Uri;
+import android.os.FileUtils;
 import android.os.Handler;
 import android.os.Process;
 import android.os.UserHandle;
@@ -55,6 +56,8 @@ import com.android.server.LocalServices;
 import com.android.server.am.psc.ProcessRecordInternal;
 import com.android.server.inputmethod.InputMethodManagerInternal;
 
+import java.io.File;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -99,6 +102,10 @@ final class AppBackgroundModeController {
     private boolean mPackageManagerRetryScheduled;
     private boolean mLoggedFreezerUnavailable;
     private boolean mDeviceIdleRetryScheduled;
+    private volatile int mAutomaticFreezerBackend =
+            AppBackgroundModeConfig.FREEZER_BACKEND_NONE;
+    private volatile int mResolvedFreezerBackend =
+            AppBackgroundModeConfig.FREEZER_BACKEND_NONE;
 
     private final AppBackgroundModeInternal mLocalService = new LocalService();
 
@@ -120,7 +127,7 @@ final class AppBackgroundModeController {
         if (mPackageManager == null) {
             if (!mPackageManagerRetryScheduled) {
                 mPackageManagerRetryScheduled = true;
-                Slog.w(TAG, "PackageManager unavailable; retrying initialization");
+                logWarning("PackageManager unavailable; retrying initialization");
                 mHandler.postDelayed(() -> {
                     mPackageManagerRetryScheduled = false;
                     onSystemReady();
@@ -129,6 +136,7 @@ final class AppBackgroundModeController {
             return;
         }
         mSystemReady = true;
+        reloadFreezerBackend(false);
         final ContentResolver resolver = mContext.getContentResolver();
         final ContentObserver settingsObserver = new ContentObserver(mHandler) {
             @Override
@@ -143,6 +151,14 @@ final class AppBackgroundModeController {
                 Settings.Secure.getUriFor(
                         Settings.Secure.UWU_APP_BACKGROUND_IGNORE_TASK_REMOVAL),
                 false, settingsObserver, UserHandle.USER_ALL);
+        resolver.registerContentObserver(
+                Settings.Global.getUriFor(Settings.Global.UWU_APP_BACKGROUND_FREEZER_BACKEND),
+                false, new ContentObserver(mHandler) {
+                    @Override
+                    public void onChange(boolean selfChange, Uri uri) {
+                        reloadFreezerBackend(true);
+                    }
+                });
 
         final IntentFilter packages = new IntentFilter();
         packages.addAction(Intent.ACTION_PACKAGE_ADDED);
@@ -180,7 +196,30 @@ final class AppBackgroundModeController {
     }
 
     boolean isTombstoneMode(@NonNull ProcessRecordInternal app) {
-        return getUidMode(app.getApplicationUid()) == AppBackgroundModeConfig.MODE_TOMBSTONE;
+        return isFreezeMode(app.getApplicationUid());
+    }
+
+    String describeFreezerBackend(@NonNull ProcessRecordInternal app) {
+        return freezerBackendName(getFreezerBackendForMode(
+                getUidMode(app.getApplicationUid())));
+    }
+
+    void onFreezerAvailabilityChanged() {
+        if (mSystemReady) {
+            mHandler.post(() -> reloadFreezerBackend(true));
+        }
+    }
+
+    static void logInfo(@NonNull String message) {
+        Slog.i(TAG, "[INFO] " + message);
+    }
+
+    static void logWarning(@NonNull String message) {
+        Slog.w(TAG, "[WARN] " + message);
+    }
+
+    static void logError(@NonNull String message, @NonNull Throwable error) {
+        Slog.e(TAG, "[ERROR] " + message, error);
     }
 
     void onBinderActivity(int applicationUid, @NonNull String reason) {
@@ -218,6 +257,145 @@ final class AppBackgroundModeController {
     private int getUidMode(int uid) {
         synchronized (mLock) {
             return mEffectiveUidModes.get(uid, AppBackgroundModeConfig.MODE_DEFAULT);
+        }
+    }
+
+    private boolean isFreezeMode(int uid) {
+        return isFreezeModeValue(getUidMode(uid));
+    }
+
+    private boolean isFreezeModeValue(int mode) {
+        return getFreezerBackendForMode(mode)
+                != AppBackgroundModeConfig.FREEZER_BACKEND_NONE;
+    }
+
+    private int getFreezerBackendForMode(int mode) {
+        if (mode == AppBackgroundModeConfig.MODE_TOMBSTONE) {
+            return mResolvedFreezerBackend;
+        }
+        if (mode == AppBackgroundModeConfig.MODE_AUTO) {
+            return mAutomaticFreezerBackend;
+        }
+        return AppBackgroundModeConfig.FREEZER_BACKEND_NONE;
+    }
+
+    private String describeFreezerBackend(int uid) {
+        return freezerBackendName(getFreezerBackendForMode(getUidMode(uid)));
+    }
+
+    private void reloadFreezerBackend(boolean reconcile) {
+        final int configured = Settings.Global.getInt(mContext.getContentResolver(),
+                Settings.Global.UWU_APP_BACKGROUND_FREEZER_BACKEND,
+                AppBackgroundModeConfig.FREEZER_BACKEND_AUTO);
+        final int requested = AppBackgroundModeConfig.normalizeFreezerBackend(configured);
+        if (configured != requested) {
+            Settings.Global.putInt(mContext.getContentResolver(),
+                    Settings.Global.UWU_APP_BACKGROUND_FREEZER_BACKEND, requested);
+            logWarning("Invalid freezer backend=" + configured + "; reset to auto");
+        }
+        final int layout = AppBackgroundModeConfig.detectCgroupLayout(readMountInfo());
+        final boolean freezerAvailable = mService.getCachedAppOptimizer().useFreezer();
+        final int resolved = AppBackgroundModeConfig.resolveFreezerBackend(
+                requested, layout, freezerAvailable);
+        final int automatic = AppBackgroundModeConfig.resolveFreezerBackend(
+                AppBackgroundModeConfig.FREEZER_BACKEND_AUTO, layout, freezerAvailable);
+        final int previousResolved = mResolvedFreezerBackend;
+        final int previousAutomatic = mAutomaticFreezerBackend;
+        mAutomaticFreezerBackend = automatic;
+        mResolvedFreezerBackend = resolved;
+
+        logInfo("Kernel freezer status: cgroup=" + cgroupLayoutName(layout)
+                + " requested=" + freezerBackendName(requested)
+                + " active=" + freezerBackendName(resolved)
+                + " automatic=" + freezerBackendName(automatic)
+                + " processFreezer=" + freezerAvailable
+                + " binderCoordination=" + (automatic
+                        != AppBackgroundModeConfig.FREEZER_BACKEND_NONE));
+        if (requested != AppBackgroundModeConfig.FREEZER_BACKEND_AUTO
+                && requested != resolved) {
+            logWarning("Requested freezer backend " + freezerBackendName(requested)
+                    + " is unavailable; using " + freezerBackendName(resolved));
+        }
+        if (reconcile && (previousResolved != resolved || previousAutomatic != automatic)) {
+            reconcileFreezerBackendChange(
+                    previousResolved, resolved, previousAutomatic, automatic);
+        }
+    }
+
+    private String readMountInfo() {
+        try {
+            return FileUtils.readTextFile(new File("/proc/self/mountinfo"), 1024 * 1024, null);
+        } catch (IOException e) {
+            logError("Unable to read /proc/self/mountinfo", e);
+            return null;
+        }
+    }
+
+    private void reconcileFreezerBackendChange(int previousResolved, int resolved,
+            int previousAutomatic, int automatic) {
+        final SparseIntArray modes;
+        synchronized (mLock) {
+            modes = mEffectiveUidModes.clone();
+        }
+        logInfo("Applying freezer backend change selected="
+                + freezerBackendName(previousResolved) + "->" + freezerBackendName(resolved)
+                + " automatic=" + freezerBackendName(previousAutomatic) + "->"
+                + freezerBackendName(automatic) + " uidCount=" + modes.size());
+        synchronized (mService) {
+            synchronized (mService.mProcLock) {
+                for (int i = 0; i < modes.size(); i++) {
+                    final int uid = modes.keyAt(i);
+                    final int mode = modes.valueAt(i);
+                    if (mode != AppBackgroundModeConfig.MODE_TOMBSTONE
+                            && mode != AppBackgroundModeConfig.MODE_AUTO) {
+                        continue;
+                    }
+                    final int previous = mode == AppBackgroundModeConfig.MODE_AUTO
+                            ? previousAutomatic : previousResolved;
+                    final int next = mode == AppBackgroundModeConfig.MODE_AUTO
+                            ? automatic : resolved;
+                    if (previous == next) {
+                        continue;
+                    }
+                    cancelFreeze(uid);
+                    if (previous != AppBackgroundModeConfig.FREEZER_BACKEND_NONE) {
+                        mService.getCachedAppOptimizer().markTombstoneThawRecoveryForUidLSP(uid);
+                        unfreezeUidLSP(uid, "freezer backend changed");
+                    }
+                    if (next != AppBackgroundModeConfig.FREEZER_BACKEND_NONE) {
+                        scheduleFreeze(uid, AppBackgroundModeConfig.FREEZE_DELAY_MS,
+                                "freezer backend changed");
+                    }
+                }
+            }
+        }
+    }
+
+    private static String cgroupLayoutName(int layout) {
+        switch (layout) {
+            case AppBackgroundModeConfig.CGROUP_LAYOUT_V1:
+                return "cgroup1";
+            case AppBackgroundModeConfig.CGROUP_LAYOUT_V2:
+                return "cgroup2";
+            case AppBackgroundModeConfig.CGROUP_LAYOUT_HYBRID:
+                return "hybrid";
+            default:
+                return "none";
+        }
+    }
+
+    private static String freezerBackendName(int backend) {
+        switch (backend) {
+            case AppBackgroundModeConfig.FREEZER_BACKEND_AUTO:
+                return "auto";
+            case AppBackgroundModeConfig.FREEZER_BACKEND_CGROUP1:
+                return "cgroup1";
+            case AppBackgroundModeConfig.FREEZER_BACKEND_CGROUP2:
+                return "cgroup2";
+            case AppBackgroundModeConfig.FREEZER_BACKEND_HYBRID:
+                return "hybrid";
+            default:
+                return "unavailable";
         }
     }
 
@@ -277,9 +455,12 @@ final class AppBackgroundModeController {
         if (parsed.changed) {
             Settings.Secure.putStringForUser(mContext.getContentResolver(),
                     Settings.Secure.UWU_APP_BACKGROUND_MODES, parsed.normalized, userId);
-            Slog.i(TAG, "Cleaned background mode configuration for user " + userId);
+            logInfo("Cleaned background mode configuration for user=" + userId
+                    + " entries=" + parsed.modes.size());
         } else {
-            Slog.i(TAG, "Loaded " + parsed.modes.size() + " background modes for user " + userId);
+            logInfo("Loaded background modes user=" + userId
+                    + " entries=" + parsed.modes.size()
+                    + " ignoreTaskRemoval=" + ignoreTaskRemoval);
         }
         if (rebuild) {
             rebuildEffectiveModes();
@@ -357,7 +538,7 @@ final class AppBackgroundModeController {
         if (deviceIdle == null) {
             if (!mDeviceIdleRetryScheduled) {
                 mDeviceIdleRetryScheduled = true;
-                Slog.w(TAG, "DeviceIdleInternal unavailable; retrying Full mode allowlist");
+                logWarning("DeviceIdleInternal unavailable; retrying Full mode allowlist");
                 mHandler.postDelayed(() -> {
                     mDeviceIdleRetryScheduled = false;
                     rebuildEffectiveModes();
@@ -391,21 +572,30 @@ final class AppBackgroundModeController {
         if (changed.isEmpty()) {
             return;
         }
-        Slog.i(TAG, "Applying background mode changes to " + changed.size() + " UIDs");
+        logInfo("Applying background mode changes uidCount=" + changed.size());
         synchronized (mService) {
             mService.updateOomAdjLocked(OOM_ADJ_REASON_RESTRICTION_CHANGE);
             synchronized (mService.mProcLock) {
                 for (int i = 0; i < changed.size(); i++) {
                     final int uid = changed.valueAt(i);
-                    if (next.get(uid, AppBackgroundModeConfig.MODE_DEFAULT)
-                            == AppBackgroundModeConfig.MODE_TOMBSTONE) {
+                    final int previousMode = previous.get(
+                            uid, AppBackgroundModeConfig.MODE_DEFAULT);
+                    final int nextMode = next.get(uid, AppBackgroundModeConfig.MODE_DEFAULT);
+                    final int previousBackend = getFreezerBackendForMode(previousMode);
+                    final int nextBackend = getFreezerBackendForMode(nextMode);
+                    if (nextBackend != AppBackgroundModeConfig.FREEZER_BACKEND_NONE) {
+                        if (previousBackend != AppBackgroundModeConfig.FREEZER_BACKEND_NONE
+                                && previousBackend != nextBackend) {
+                            mService.getCachedAppOptimizer()
+                                    .markTombstoneThawRecoveryForUidLSP(uid);
+                            unfreezeUidLSP(uid, "app mode changed freezer backend");
+                        }
                         scheduleFreeze(uid, AppBackgroundModeConfig.FREEZE_DELAY_MS,
                                 "mode changed");
                     } else {
                         cancelFreeze(uid);
                         cancelBinderProtectionTimeout(uid);
-                        if (previous.get(uid, AppBackgroundModeConfig.MODE_DEFAULT)
-                                == AppBackgroundModeConfig.MODE_TOMBSTONE) {
+                        if (previousBackend != AppBackgroundModeConfig.FREEZER_BACKEND_NONE) {
                             mService.getCachedAppOptimizer()
                                     .markTombstoneThawRecoveryForUidLSP(uid);
                         }
@@ -562,7 +752,7 @@ final class AppBackgroundModeController {
     private void onProtectionStarted(int uid, String reason) {
         cancelFreeze(uid);
         mHandler.post(() -> {
-            if (getUidMode(uid) == AppBackgroundModeConfig.MODE_TOMBSTONE) {
+            if (isFreezeMode(uid)) {
                 unfreezeUid(uid, reason);
             }
         });
@@ -591,7 +781,7 @@ final class AppBackgroundModeController {
     }
 
     private void beginBinderProtection(int uid, String reason) {
-        if (getUidMode(uid) != AppBackgroundModeConfig.MODE_TOMBSTONE) {
+        if (!isFreezeMode(uid)) {
             return;
         }
         if (isBinderRecoveryPending(uid)) {
@@ -638,7 +828,7 @@ final class AppBackgroundModeController {
             synchronized (mStateLock) {
                 mBinderRecoveryPendingUids.remove(uid);
             }
-            if (getUidMode(uid) == AppBackgroundModeConfig.MODE_TOMBSTONE) {
+            if (isFreezeMode(uid)) {
                 beginBinderProtection(uid, "recovery retry: " + reason);
             } else {
                 unfreezeUid(uid, "binder recovery retry: " + reason);
@@ -651,7 +841,8 @@ final class AppBackgroundModeController {
         };
         mBinderRecoveryRetries.put(uid, retry);
         mHandler.postDelayed(retry, AppBackgroundModeConfig.BINDER_RECOVERY_RETRY_DELAY_MS);
-        Slog.w(TAG, "Scheduled binder recovery uid=" + uid + " reason=" + reason);
+        logWarning("Scheduled binder recovery uid=" + uid + " reason=" + reason
+                + " backend=" + describeFreezerBackend(uid));
     }
 
     private void cancelBinderProtectionTimeout(int uid) {
@@ -663,7 +854,7 @@ final class AppBackgroundModeController {
     }
 
     private void scheduleFreeze(int uid, long delay, String reason) {
-        if (getUidMode(uid) != AppBackgroundModeConfig.MODE_TOMBSTONE || isProtected(uid)) {
+        if (!isFreezeMode(uid) || isProtected(uid)) {
             return;
         }
         if (mPendingFreezes.get(uid) != null) {
@@ -675,7 +866,8 @@ final class AppBackgroundModeController {
         };
         mPendingFreezes.put(uid, task);
         mHandler.postDelayed(task, delay);
-        Slog.i(TAG, "Scheduled freeze uid=" + uid + " delay=" + delay + "ms reason=" + reason);
+        logInfo("Scheduled freeze uid=" + uid + " delayMs=" + delay + " reason=" + reason
+                + " backend=" + describeFreezerBackend(uid));
     }
 
     private void cancelFreeze(int uid) {
@@ -683,26 +875,27 @@ final class AppBackgroundModeController {
         if (pending != null) {
             mHandler.removeCallbacks(pending);
             mPendingFreezes.remove(uid);
-            Slog.i(TAG, "Cancelled freeze uid=" + uid);
+            logInfo("Cancelled freeze uid=" + uid);
         }
     }
 
     private void freezeUid(int uid) {
-        if (getUidMode(uid) != AppBackgroundModeConfig.MODE_TOMBSTONE || isProtected(uid)) {
-            Slog.i(TAG, "Skipped freeze uid=" + uid + " reason=protected or mode changed");
+        if (!isFreezeMode(uid) || isProtected(uid)) {
+            logInfo("Skipped freeze uid=" + uid + " reason=protected-or-mode-changed"
+                    + " mode=" + getUidMode(uid) + " backend=" + describeFreezerBackend(uid));
             return;
         }
         if (!mService.getCachedAppOptimizer().useFreezer()) {
             if (!mLoggedFreezerUnavailable) {
                 mLoggedFreezerUnavailable = true;
-                Slog.w(TAG, "Freezer unavailable; tombstone modes remain configured");
+                logWarning("Process freezer unavailable; configured freeze modes are inactive");
             }
             return;
         }
         synchronized (mService) {
             synchronized (mService.mProcLock) {
                 if (isProtected(uid)) {
-                    Slog.i(TAG, "Skipped freeze uid=" + uid + " reason=state changed");
+                    logInfo("Skipped freeze uid=" + uid + " reason=state-changed");
                     return;
                 }
                 final ArrayList<ProcessRecord> processes = collectProcessesForUidLSP(uid);
@@ -712,8 +905,10 @@ final class AppBackgroundModeController {
                 for (ProcessRecord process : processes) {
                     final String skipReason = getFreezeSkipReasonLSP(process);
                     if (skipReason != null) {
-                        Slog.i(TAG, "Deferred freeze uid=" + uid + " pid=" + process.getPid()
-                                + " reason=" + skipReason);
+                        logInfo("Deferred freeze uid=" + uid + " pid=" + process.getPid()
+                                + " process=" + process.processName + " reason=" + skipReason
+                                + " curAdj=" + process.getCurAdj()
+                                + " setAdj=" + process.getSetAdj());
                         unfreezeUidLSP(uid, "freeze deferred: " + skipReason);
                         scheduleFreeze(uid, AppBackgroundModeConfig.FREEZE_DELAY_MS,
                                 "retry after " + skipReason);
@@ -725,8 +920,10 @@ final class AppBackgroundModeController {
                         continue;
                     }
                     mService.getCachedAppOptimizer().freezeAppAsyncImmediateLSP(process);
-                    Slog.i(TAG, "Freezing uid=" + uid + " pid=" + process.getPid()
-                            + " process=" + process.processName);
+                    logInfo("Freezing uid=" + uid + " pid=" + process.getPid()
+                            + " process=" + process.processName
+                            + " backend=" + describeFreezerBackend(uid)
+                            + " binder=coordinated cgroup=pending");
                 }
             }
         }
@@ -790,8 +987,9 @@ final class AppBackgroundModeController {
                             .hasPendingTombstoneRecoveryLSP(process)) {
                 mService.getCachedAppOptimizer().unfreezeAppLSP(process,
                         CachedAppOptimizer.UNFREEZE_REASON_UI_VISIBILITY, true);
-                Slog.i(TAG, "Unfroze uid=" + uid + " pid=" + process.getPid()
-                        + " reason=" + reason);
+                logInfo("Unfroze uid=" + uid + " pid=" + process.getPid()
+                        + " process=" + process.processName + " reason=" + reason
+                        + " binder=coordinated cgroup=thaw-requested");
             }
         }
     }

@@ -13485,6 +13485,31 @@ public final class Settings {
         /** @hide */
         public static final int UWU_APP_SENSOR_POLICY_DENY_ALWAYS = 2;
 
+        /** @hide */
+        public static final int UWU_APP_BACKGROUND_MODE_DEFAULT = 0;
+
+        /** @hide */
+        public static final int UWU_APP_BACKGROUND_MODE_TOMBSTONE = 1;
+
+        /** @hide */
+        public static final int UWU_APP_BACKGROUND_MODE_FULL = 2;
+
+        /** @hide */
+        public static final int UWU_APP_BACKGROUND_MODE_AUTO = 3;
+
+        /**
+         * Per-user JSON map from package name to app background mode.
+         *
+         * @hide
+         */
+        @Readable
+        public static final String UWU_APP_BACKGROUND_MODES = "uwu_app_background_modes";
+
+        /** Whether removing an app task should preserve its background process. @hide */
+        @Readable
+        public static final String UWU_APP_BACKGROUND_IGNORE_TASK_REMOVAL =
+                "uwu_app_background_ignore_task_removal";
+
         /**
          * Navigation bar mode.
          *  0 = 3 button
@@ -14816,6 +14841,27 @@ public final class Settings {
          * The content:// style URL for global secure settings items.  Not public.
          */
         public static final Uri CONTENT_URI = Uri.parse("content://" + AUTHORITY + "/global");
+
+        /** @hide */
+        public static final int UWU_APP_BACKGROUND_FREEZER_BACKEND_AUTO = 0;
+
+        /** @hide */
+        public static final int UWU_APP_BACKGROUND_FREEZER_BACKEND_CGROUP1 = 1;
+
+        /** @hide */
+        public static final int UWU_APP_BACKGROUND_FREEZER_BACKEND_CGROUP2 = 2;
+
+        /** @hide */
+        public static final int UWU_APP_BACKGROUND_FREEZER_BACKEND_HYBRID = 3;
+
+        /**
+         * Preferred freezer hierarchy for uwuAOSP app background management.
+         *
+         * @hide
+         */
+        @Readable
+        public static final String UWU_APP_BACKGROUND_FREEZER_BACKEND =
+                "uwu_app_background_freezer_backend";
 
         /**
          * Whether the notification bubbles are globally enabled

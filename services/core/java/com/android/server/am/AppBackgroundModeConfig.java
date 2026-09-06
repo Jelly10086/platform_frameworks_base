@@ -37,6 +37,22 @@ final class AppBackgroundModeConfig {
     static final int MODE_DEFAULT = Settings.Secure.UWU_APP_BACKGROUND_MODE_DEFAULT;
     static final int MODE_TOMBSTONE = Settings.Secure.UWU_APP_BACKGROUND_MODE_TOMBSTONE;
     static final int MODE_FULL = Settings.Secure.UWU_APP_BACKGROUND_MODE_FULL;
+    static final int MODE_AUTO = Settings.Secure.UWU_APP_BACKGROUND_MODE_AUTO;
+
+    static final int FREEZER_BACKEND_AUTO =
+            Settings.Global.UWU_APP_BACKGROUND_FREEZER_BACKEND_AUTO;
+    static final int FREEZER_BACKEND_CGROUP1 =
+            Settings.Global.UWU_APP_BACKGROUND_FREEZER_BACKEND_CGROUP1;
+    static final int FREEZER_BACKEND_CGROUP2 =
+            Settings.Global.UWU_APP_BACKGROUND_FREEZER_BACKEND_CGROUP2;
+    static final int FREEZER_BACKEND_HYBRID =
+            Settings.Global.UWU_APP_BACKGROUND_FREEZER_BACKEND_HYBRID;
+    static final int FREEZER_BACKEND_NONE = -1;
+
+    static final int CGROUP_LAYOUT_NONE = 0;
+    static final int CGROUP_LAYOUT_V1 = 1;
+    static final int CGROUP_LAYOUT_V2 = 2;
+    static final int CGROUP_LAYOUT_HYBRID = 3;
 
     static final long FREEZE_DELAY_MS = 3_000L;
     static final long AUDIO_STOP_FREEZE_DELAY_MS = 6_000L;
@@ -65,8 +81,12 @@ final class AppBackgroundModeConfig {
                 final Iterator<String> keys = object.keys();
                 while (keys.hasNext()) {
                     final String packageName = keys.next();
-                    final int mode = object.optInt(packageName, MODE_DEFAULT);
-                    if ((mode == MODE_TOMBSTONE || mode == MODE_FULL)
+                    int mode = object.optInt(packageName, MODE_DEFAULT);
+                    if (mode == MODE_AUTO) {
+                        mode = MODE_TOMBSTONE;
+                        malformed = true;
+                    }
+                    if ((mode == MODE_TOMBSTONE || mode == MODE_FULL || mode == MODE_AUTO)
                             && packageAllowed.test(packageName)) {
                         sorted.put(packageName, mode);
                     } else {
@@ -98,21 +118,94 @@ final class AppBackgroundModeConfig {
         if (packageModes == null || packageModes.length == 0) {
             return MODE_DEFAULT;
         }
-        boolean allTombstone = true;
+        boolean allManagedByFreezer = true;
+        boolean hasTombstone = false;
         for (int mode : packageModes) {
             if (mode == MODE_FULL) {
                 return MODE_FULL;
             }
-            if (mode != MODE_TOMBSTONE) {
-                allTombstone = false;
+            if (mode == MODE_TOMBSTONE) {
+                hasTombstone = true;
+            } else if (mode != MODE_AUTO) {
+                allManagedByFreezer = false;
             }
         }
-        return allTombstone ? MODE_TOMBSTONE : MODE_DEFAULT;
+        if (!allManagedByFreezer) {
+            return MODE_DEFAULT;
+        }
+        return hasTombstone ? MODE_TOMBSTONE : MODE_AUTO;
     }
 
     @VisibleForTesting
     static boolean shouldIgnoreTaskRemoval(boolean enabled, int mode) {
-        return enabled && (mode == MODE_TOMBSTONE || mode == MODE_FULL);
+        return enabled && (mode == MODE_TOMBSTONE || mode == MODE_FULL || mode == MODE_AUTO);
+    }
+
+    @VisibleForTesting
+    static int detectCgroupLayout(@Nullable String mountInfo) {
+        if (mountInfo == null || mountInfo.isBlank()) {
+            return CGROUP_LAYOUT_NONE;
+        }
+        boolean cgroup1Freezer = false;
+        boolean cgroup2 = false;
+        for (String line : mountInfo.split("\\n")) {
+            final int separator = line.indexOf(" - ");
+            if (separator < 0) {
+                continue;
+            }
+            final String mount = line.substring(0, separator);
+            final String filesystem = line.substring(separator + 3);
+            if (filesystem.startsWith("cgroup2 ")) {
+                cgroup2 = true;
+            } else if (filesystem.startsWith("cgroup ")
+                    && (filesystem.contains("freezer") || mount.contains("/freezer"))) {
+                cgroup1Freezer = true;
+            }
+        }
+        if (cgroup1Freezer && cgroup2) {
+            return CGROUP_LAYOUT_HYBRID;
+        }
+        if (cgroup1Freezer) {
+            return CGROUP_LAYOUT_V1;
+        }
+        return cgroup2 ? CGROUP_LAYOUT_V2 : CGROUP_LAYOUT_NONE;
+    }
+
+    @VisibleForTesting
+    static int normalizeFreezerBackend(int backend) {
+        switch (backend) {
+            case FREEZER_BACKEND_AUTO:
+            case FREEZER_BACKEND_CGROUP1:
+            case FREEZER_BACKEND_CGROUP2:
+            case FREEZER_BACKEND_HYBRID:
+                return backend;
+            default:
+                return FREEZER_BACKEND_AUTO;
+        }
+    }
+
+    @VisibleForTesting
+    static int resolveFreezerBackend(int requested, int layout, boolean freezerAvailable) {
+        if (!freezerAvailable || layout == CGROUP_LAYOUT_NONE) {
+            return FREEZER_BACKEND_NONE;
+        }
+        requested = normalizeFreezerBackend(requested);
+        if (requested == FREEZER_BACKEND_CGROUP1
+                && (layout == CGROUP_LAYOUT_V1 || layout == CGROUP_LAYOUT_HYBRID)) {
+            return FREEZER_BACKEND_CGROUP1;
+        }
+        if (requested == FREEZER_BACKEND_CGROUP2
+                && (layout == CGROUP_LAYOUT_V2 || layout == CGROUP_LAYOUT_HYBRID)) {
+            return FREEZER_BACKEND_CGROUP2;
+        }
+        if (requested == FREEZER_BACKEND_HYBRID && layout == CGROUP_LAYOUT_HYBRID) {
+            return FREEZER_BACKEND_HYBRID;
+        }
+        if (layout == CGROUP_LAYOUT_HYBRID) {
+            return FREEZER_BACKEND_HYBRID;
+        }
+        return layout == CGROUP_LAYOUT_V1
+                ? FREEZER_BACKEND_CGROUP1 : FREEZER_BACKEND_CGROUP2;
     }
 
     @VisibleForTesting
