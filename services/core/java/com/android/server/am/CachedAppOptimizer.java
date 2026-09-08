@@ -3264,31 +3264,16 @@ public class CachedAppOptimizer {
         final long now = SystemClock.uptimeMillis();
         if (now < mFreezerBinderCallbackLast + mFreezerBinderCallbackThrottle) {
             Slog.d(TAG_AM, "Too many transaction errors, throttling transaction error callback.");
-            if (hasFrozenTombstoneProcess()) {
-                scheduleBinderErrorScan(true);
-            }
+            // Binder callbacks can arrive while WindowManager holds its global lock. Never take
+            // mProcLock here: process cleanup takes mProcLock before the WM lock, so doing so would
+            // invert the lock order and deadlock system_server. The freezer thread performs the
+            // tombstone check after the callback returns.
+            scheduleBinderErrorScan(true);
             return;
         }
         mFreezerBinderCallbackLast = now;
 
         scheduleBinderErrorScan(false);
-    }
-
-    private boolean hasFrozenTombstoneProcess() {
-        final AppBackgroundModeController controller = mAm.mAppBackgroundModeController;
-        if (controller == null) {
-            return false;
-        }
-        synchronized (mProcLock) {
-            for (int i = mFrozenProcesses.size() - 1; i >= 0; i--) {
-                final ProcessRecord process = mFrozenProcesses.valueAt(i);
-                if (controller.isTombstoneMode(process)
-                        && !controller.isBinderRecoveryPending(process.getApplicationUid())) {
-                    return true;
-                }
-            }
-        }
-        return false;
     }
 
     private void scheduleBinderErrorScan(boolean tombstoneOnly) {
