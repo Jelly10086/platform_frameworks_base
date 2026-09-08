@@ -161,14 +161,16 @@ class CaptionVisibilityHelper(
     }
 
     private fun allowedForDisplay(display: Display): Boolean {
+        val supportsDesktopMode = desktopState.isDesktopModeSupportedOnDisplay(display)
         if (
             display.type != Display.TYPE_INTERNAL &&
-                !displayController.isDisplayInTopology(display.displayId)
+                !displayController.isDisplayInTopology(display.displayId) &&
+                !supportsDesktopMode
         ) {
             return false
         }
 
-        if (desktopState.isDesktopModeSupportedOnDisplay(display)) {
+        if (supportsDesktopMode) {
             return true
         }
         // If on default display and on Large Screen (unfolded), show app handle

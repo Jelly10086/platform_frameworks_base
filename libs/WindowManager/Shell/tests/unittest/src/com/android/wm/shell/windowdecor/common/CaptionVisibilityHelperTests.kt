@@ -266,10 +266,29 @@ class CaptionVisibilityHelperTests : ShellTestCase() {
     }
 
     @Test
-    fun shouldCreateCaption_nonDefaultAndNonInternalDisplay_returnsFalse() {
-        val task = createFreeformTask(DEFAULT_DISPLAY_ID)
-        whenever(mockDisplay.type).thenReturn(Display.TYPE_OVERLAY)
-        whenever(mockDisplayController.isDisplayInTopology(DEFAULT_DISPLAY_ID)).thenReturn(false)
+    fun shouldCreateCaption_nonTopologyDesktopDisplay_returnsTrue() {
+        val task = createFreeformTask(EXTERNAL_DISPLAY_ID)
+        whenever(mockDisplay.type).thenReturn(Display.TYPE_VIRTUAL)
+        whenever(mockDisplay.displayId).thenReturn(EXTERNAL_DISPLAY_ID)
+        whenever(mockDisplayController.isDisplayInTopology(EXTERNAL_DISPLAY_ID)).thenReturn(false)
+        desktopState.overrideDesktopModeSupportPerDisplay[EXTERNAL_DISPLAY_ID] = true
+
+        val shouldCreateCaption =
+            captionVisibilityHelper.shouldCreateCaption(
+                taskInfo = task,
+                isKeyguardVisAndOccluded = DEFAULT_KEYGUARD_VIS_AND_OCCLUDED,
+            )
+
+        assertTrue(shouldCreateCaption)
+    }
+
+    @Test
+    fun shouldCreateCaption_nonTopologyDisplayWithoutDesktopSupport_returnsFalse() {
+        val task = createFreeformTask(EXTERNAL_DISPLAY_ID)
+        whenever(mockDisplay.type).thenReturn(Display.TYPE_VIRTUAL)
+        whenever(mockDisplay.displayId).thenReturn(EXTERNAL_DISPLAY_ID)
+        whenever(mockDisplayController.isDisplayInTopology(EXTERNAL_DISPLAY_ID)).thenReturn(false)
+        desktopState.overrideDesktopModeSupportPerDisplay[EXTERNAL_DISPLAY_ID] = false
 
         val shouldCreateCaption =
             captionVisibilityHelper.shouldCreateCaption(
@@ -296,6 +315,7 @@ class CaptionVisibilityHelperTests : ShellTestCase() {
 
     companion object {
         private const val DEFAULT_DISPLAY_ID: Int = 0
+        private const val EXTERNAL_DISPLAY_ID: Int = 2
         private const val DEFAULT_KEYGUARD_VIS_AND_OCCLUDED = false
     }
 }
