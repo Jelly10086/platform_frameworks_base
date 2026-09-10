@@ -53,6 +53,7 @@ import android.os.RemoteException
 import android.os.Trace
 import android.os.UserHandle
 import android.os.UserManager
+import android.provider.Settings
 import android.view.Display.DEFAULT_DISPLAY
 import android.view.Display.INVALID_DISPLAY
 import android.view.DragEvent
@@ -902,8 +903,15 @@ class DesktopTasksController(
         //  resolved.
         // TODO: b/391652399 - Investigate why sometimes disconnect results in a black background.
         //  Additionally, investigate why wallpaper goes to front for inactive users.
+        val exitDesktopMode =
+            Settings.Secure.getIntForUser(
+                context.contentResolver,
+                Settings.Secure.UWU_EXTERNAL_DESKTOP_ENABLED,
+                0,
+                shellController.currentUserId,
+            ) != 0
         val desktopModeSupportedOnDisplay =
-            desktopState.isDesktopModeSupportedOnDisplay(destinationDisplayId)
+            desktopState.isDesktopModeSupportedOnDisplay(destinationDisplayId) && !exitDesktopMode
         val destDisplayLayout = displayController.getDisplayLayout(destinationDisplayId)
         if (destDisplayLayout == null) {
             logE(
@@ -937,6 +945,7 @@ class DesktopTasksController(
                     disconnectedDisplayId,
                     destinationDisplayId,
                     userId,
+                    exitDesktopMode,
                 )
             }
         }
@@ -1135,6 +1144,7 @@ class DesktopTasksController(
         disconnectedDisplayId: Int,
         destinationDisplayId: Int,
         userId: Int,
+        forceFullscreen: Boolean,
     ) {
         logD("handleProjectedModeDisconnect: moving tasks to non-desktop display")
         // Desktop not supported on display; reparent tasks to display area, remove desk.
@@ -1147,6 +1157,10 @@ class DesktopTasksController(
             for (taskId in taskIds) {
                 val task = shellTaskOrganizer.getRunningTaskInfo(taskId) ?: continue
                 wct.reparent(task.token, tdaInfo.token, /* onTop= */ false)
+                if (forceFullscreen) {
+                    wct.setWindowingMode(task.token, WINDOWING_MODE_FULLSCREEN)
+                    wct.setBounds(task.token, null)
+                }
             }
             desksOrganizer.removeDesk(wct, deskId, userId)
             runOnTransitStartList.add { transition ->
