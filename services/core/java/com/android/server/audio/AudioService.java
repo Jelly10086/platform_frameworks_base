@@ -1858,8 +1858,10 @@ public class AudioService extends IAudioService.Stub
         boolean multiAudioFocusEnabledDefault =
                 audioFocusDesktop() && mContext.getResources().getBoolean(
                         com.android.internal.R.bool.config_multi_audio_focus_enabled_default);
-        return Settings.System.getIntForUser(cr, Settings.System.MULTI_AUDIO_FOCUS_ENABLED,
-                multiAudioFocusEnabledDefault ? 1 : 0, cr.getUserId()) != 0;
+        return Settings.System.getIntForUser(cr, Settings.System.SHOW_APP_VOLUME,
+                        0, cr.getUserId()) != 0
+                || Settings.System.getIntForUser(cr, Settings.System.MULTI_AUDIO_FOCUS_ENABLED,
+                        multiAudioFocusEnabledDefault ? 1 : 0, cr.getUserId()) != 0;
     }
 
     private void initVolumeStreamStates() {
@@ -12202,6 +12204,8 @@ public class AudioService extends IAudioService.Stub
                     Settings.System.MASTER_MONO), false, this, UserHandle.USER_ALL);
             mContentResolver.registerContentObserver(Settings.System.getUriFor(
                     Settings.System.MASTER_BALANCE), false, this, UserHandle.USER_ALL);
+            mContentResolver.registerContentObserver(Settings.System.getUriFor(
+                    Settings.System.SHOW_APP_VOLUME), false, this, UserHandle.USER_ALL);
 
             mEncodedSurroundMode = mSettings.getGlobalInt(
                     mContentResolver, Settings.Global.ENCODED_SURROUND_OUTPUT,
@@ -12244,6 +12248,11 @@ public class AudioService extends IAudioService.Stub
 
             synchronized (mAssistantUidLock) {
                 updateAssistantUIdLocked(/* forceUpdate= */ false);
+            }
+
+            final boolean multiFocusEnabled = isMultiFocus();
+            if (mMediaFocusControl.getMultiAudioFocusEnabled() != multiFocusEnabled) {
+                mMediaFocusControl.updateMultiAudioFocus(multiFocusEnabled);
             }
         }
 

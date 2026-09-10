@@ -112,6 +112,7 @@ constructor(
             .filterNotNull()
 
     val isVisible = interactor.isVisible
+    val isAppVolumeVisible = interactor.isAppVolumeVisible
     val icon: Flow<Drawable> =
         mediaOutputInteractor.defaultActiveMediaSession
             .filterData()
@@ -171,6 +172,10 @@ constructor(
             detailsViewModel.onVolumeSettingsButtonClicked(audioDetailsViewModelFactory.create())
         }
         uiEventLogger.log(VolumeDialogUiEvent.VOLUME_DIALOG_SETTINGS_CLICK)
+    }
+
+    fun onAppVolumeButtonClicked() {
+        interactor.onAppVolumeButtonClicked()
     }
 
     private data class PlaybackStates(val isPreviousActive: Boolean?, val isCurrentActive: Boolean)

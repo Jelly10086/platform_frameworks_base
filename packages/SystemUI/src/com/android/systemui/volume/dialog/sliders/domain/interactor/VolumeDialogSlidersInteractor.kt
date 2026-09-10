@@ -17,6 +17,7 @@
 package com.android.systemui.volume.dialog.sliders.domain.interactor
 
 import android.content.pm.PackageManager
+import android.media.AppVolume
 import android.media.AudioManager
 import android.media.AudioSystem
 import com.android.systemui.volume.VolumeDialogControllerImpl
@@ -46,6 +47,7 @@ class VolumeDialogSlidersInteractor
 constructor(
     volumeDialogStateInteractor: VolumeDialogStateInteractor,
     private val packageManager: PackageManager,
+    private val audioManager: AudioManager,
     @VolumeDialog private val coroutineScope: CoroutineScope,
 ) {
 
@@ -54,22 +56,36 @@ constructor(
         volumeDialogStateInteractor.volumeDialogState
             .filter { it.streamModels.isNotEmpty() }
             .map { stateModel ->
-                val sliderTypes =
+                val streamSliderTypes =
                     stateModel.streamModels.values
                         .filter { streamModel -> shouldShowSliders(stateModel, streamModel) }
                         .sortedWith(streamsSorter)
                         .map { model -> model.toType() }
-                LinkedHashSet(sliderTypes)
+                SliderTypes(
+                    streams = LinkedHashSet(streamSliderTypes),
+                    apps =
+                        audioManager
+                            .listAppVolumes()
+                            .asSequence()
+                            .filter(AppVolume::isActive)
+                            .distinctBy(AppVolume::getPackageName)
+                            .map { it.toSliderType() }
+                            .toList(),
+                )
             }
             .runningReduce { sliderTypes, newSliderTypes ->
-                sliderTypes.apply { addAll(newSliderTypes) }
+                SliderTypes(
+                    streams = sliderTypes.streams.apply { addAll(newSliderTypes.streams) },
+                    apps = newSliderTypes.apps,
+                )
             }
             .map { sliderTypes ->
-                val primarySlider = sliderTypes.firstOrNull()
+                val allSliders = sliderTypes.streams + sliderTypes.apps
+                val primarySlider = allSliders.firstOrNull()
                 primarySlider ?: return@map null
                 VolumeDialogSlidersModel(
                     slider = primarySlider,
-                    floatingSliders = sliderTypes.drop(1),
+                    floatingSliders = allSliders.drop(1),
                 )
             }
             .stateIn(coroutineScope, SharingStarted.Eagerly, null)
@@ -108,6 +124,27 @@ constructor(
             else -> VolumeDialogSliderType.Stream(stream)
         }
     }
+
+    private fun AppVolume.toSliderType(): VolumeDialogSliderType.App {
+        val appPackageName = packageName
+        val label =
+            runCatching {
+                    packageManager.getApplicationLabel(
+                        packageManager.getApplicationInfo(
+                            appPackageName,
+                            PackageManager.ApplicationInfoFlags.of(0),
+                        )
+                    )
+                }
+                .getOrDefault(appPackageName)
+                .toString()
+        return VolumeDialogSliderType.App(appPackageName, label)
+    }
+
+    private data class SliderTypes(
+        val streams: LinkedHashSet<VolumeDialogSliderType>,
+        val apps: List<VolumeDialogSliderType.App>,
+    )
 
     private class StreamsSorter : Comparator<VolumeDialogStreamModel> {
 

@@ -16,6 +16,7 @@
 
 package com.android.systemui.kosmos.audio
 
+import android.media.AppVolume
 import android.media.AudioDeviceCallback
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
@@ -46,4 +47,8 @@ class FakeAudioManager : AudioManager() {
     override fun unregisterAudioDeviceCallback(callback: AudioDeviceCallback) {
         this.callback = null
     }
+
+    override fun listAppVolumes(): ArrayList<AppVolume> = arrayListOf()
+
+    override fun setAppVolume(packageName: String, volume: Float): Int = SUCCESS
 }

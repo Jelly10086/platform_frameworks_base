@@ -2434,7 +2434,7 @@
     <bool name="config_audio_ringer_mode_affects_alarm_stream">false</bool>
 
     <!-- The default value for whether multi audio focus is enabled -->
-    <bool name="config_multi_audio_focus_enabled_default">false</bool>
+    <bool name="config_multi_audio_focus_enabled_default">true</bool>
 
     <!-- The default value for whether head tracking for
          spatial audio is enabled for a newly connected audio device -->

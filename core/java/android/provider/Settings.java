@@ -5916,6 +5916,9 @@ public final class Settings {
         @Readable
         public static final String MASTER_BALANCE = "master_balance";
 
+        /** @hide */
+        public static final String SHOW_APP_VOLUME = "show_app_volume";
+
         /**
          * Whether the notifications should use the ring volume (value of 1) or
          * a separate notification volume (value of 0). In most cases, users
@@ -7223,6 +7226,7 @@ public final class Settings {
             PRIVATE_SETTINGS.add(VOLUME_MASTER);
             PRIVATE_SETTINGS.add(MASTER_MONO);
             PRIVATE_SETTINGS.add(MASTER_BALANCE);
+            PRIVATE_SETTINGS.add(SHOW_APP_VOLUME);
             PRIVATE_SETTINGS.add(NOTIFICATIONS_USE_RING_VOLUME);
             PRIVATE_SETTINGS.add(VIBRATE_IN_SILENT);
             PRIVATE_SETTINGS.add(MEDIA_BUTTON_RECEIVER);

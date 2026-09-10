@@ -19,6 +19,7 @@ package com.android.systemui.volume.dialog.sliders.domain.interactor
 import android.content.packageManager
 import com.android.systemui.kosmos.Kosmos
 import com.android.systemui.kosmos.applicationCoroutineScope
+import com.android.systemui.kosmos.audio.audioManager
 import com.android.systemui.volume.dialog.domain.interactor.volumeDialogStateInteractor
 
 val Kosmos.volumeDialogSlidersInteractor: VolumeDialogSlidersInteractor by
@@ -26,6 +27,7 @@ val Kosmos.volumeDialogSlidersInteractor: VolumeDialogSlidersInteractor by
         VolumeDialogSlidersInteractor(
             volumeDialogStateInteractor,
             packageManager,
+            audioManager,
             applicationCoroutineScope,
         )
     }

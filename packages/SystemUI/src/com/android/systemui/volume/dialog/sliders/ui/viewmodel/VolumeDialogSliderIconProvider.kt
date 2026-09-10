@@ -47,6 +47,17 @@ constructor(
     private val audioVolumeInteractor: AudioVolumeInteractor,
 ) {
 
+    fun getAppIcon(packageName: String): Flow<Icon.Loaded> {
+        return flow {
+            val drawable =
+                withContext(uiBackgroundContext) {
+                    runCatching { context.packageManager.getApplicationIcon(packageName) }
+                        .getOrElse { context.packageManager.defaultActivityIcon }
+                }
+            emit(Icon.Loaded(drawable = drawable, contentDescription = null))
+        }
+    }
+
     fun getAudioSharingIcon(isMuted: Boolean): Flow<Icon.Loaded> {
         return flow {
             val iconRes =

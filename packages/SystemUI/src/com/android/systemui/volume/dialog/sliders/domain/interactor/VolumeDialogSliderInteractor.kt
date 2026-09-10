@@ -16,6 +16,8 @@
 
 package com.android.systemui.volume.dialog.sliders.domain.interactor
 
+import android.media.AppVolume
+import android.media.AudioManager
 import com.android.settingslib.volume.shared.model.AudioStream
 import com.android.systemui.dagger.qualifiers.Background
 import com.android.systemui.plugins.VolumeDialogController
@@ -30,6 +32,7 @@ import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
@@ -47,6 +50,7 @@ constructor(
     @VolumeDialog private val coroutineScope: CoroutineScope,
     volumeDialogStateInteractor: VolumeDialogStateInteractor,
     private val volumeDialogController: VolumeDialogController,
+    private val audioManager: AudioManager,
     zenModeInteractor: ZenModeInteractor,
 ) {
 
@@ -72,6 +76,20 @@ constructor(
             .stateIn(coroutineScope, SharingStarted.Eagerly, null)
             .filterNotNull()
 
+    val appVolume: Flow<AppVolume> =
+        if (sliderType is VolumeDialogSliderType.App) {
+            volumeDialogStateInteractor.volumeDialogState
+                .mapNotNull {
+                    audioManager.listAppVolumes().firstOrNull { appVolume ->
+                        appVolume.packageName == sliderType.packageName
+                    }
+                }
+                .stateIn(coroutineScope, SharingStarted.Eagerly, null)
+                .filterNotNull()
+        } else {
+            emptyFlow()
+        }
+
     suspend fun setStreamVolume(userLevel: Int) {
         withContext(backgroundContext) {
             with(volumeDialogController) {
@@ -79,6 +97,21 @@ constructor(
                 setActiveStream(sliderType.audioStream, true)
             }
         }
+    }
+
+    suspend fun setAppVolume(userLevel: Int) {
+        val appSlider = sliderType as? VolumeDialogSliderType.App ?: return
+        withContext(backgroundContext) {
+            audioManager.setAppVolume(
+                appSlider.packageName,
+                userLevel.coerceIn(APP_VOLUME_MIN, APP_VOLUME_MAX) / APP_VOLUME_MAX.toFloat(),
+            )
+        }
+    }
+
+    private companion object {
+        const val APP_VOLUME_MIN = 0
+        const val APP_VOLUME_MAX = 100
     }
 }
 

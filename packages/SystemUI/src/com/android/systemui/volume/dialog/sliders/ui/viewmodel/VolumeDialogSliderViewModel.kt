@@ -81,70 +81,109 @@ constructor(
     private val userVolumeUpdates = MutableStateFlow<VolumeUpdate?>(null)
     private val model: Flow<VolumeDialogStreamModel> = interactor.slider
 
-    val state: Flow<VolumeDialogSliderStateModel> =
-        combine(
-                interactor.isDisabledByZenMode,
-                model,
-                model.flatMapLatest { streamModel ->
-                    with(streamModel) {
-                        val isMuted = muteSupported && muted
-                        when (sliderType) {
-                            is VolumeDialogSliderType.Stream ->
-                                volumeDialogSliderIconProvider.getStreamIcon(
-                                    stream = sliderType.audioStream,
-                                    level = level,
-                                    levelMin = levelMin,
-                                    levelMax = levelMax,
-                                    isMuted = isMuted,
-                                    isRoutedToBluetooth = routedToBluetooth,
-                                )
-                            is VolumeDialogSliderType.RemoteMediaStream -> {
-                                volumeDialogSliderIconProvider.getCastIcon(isMuted)
-                            }
-                            is VolumeDialogSliderType.AudioSharingStream -> {
-                                volumeDialogSliderIconProvider.getAudioSharingIcon(isMuted)
+    private val streamState: Flow<VolumeDialogSliderStateModel> =
+        if (sliderType is VolumeDialogSliderType.App) {
+            kotlinx.coroutines.flow.emptyFlow()
+        } else
+            combine(
+                    interactor.isDisabledByZenMode,
+                    model,
+                    model.flatMapLatest { streamModel ->
+                        with(streamModel) {
+                            val isMuted = muteSupported && muted
+                            when (sliderType) {
+                                is VolumeDialogSliderType.Stream ->
+                                    volumeDialogSliderIconProvider.getStreamIcon(
+                                        stream = sliderType.audioStream,
+                                        level = level,
+                                        levelMin = levelMin,
+                                        levelMax = levelMax,
+                                        isMuted = isMuted,
+                                        isRoutedToBluetooth = routedToBluetooth,
+                                    )
+                                is VolumeDialogSliderType.RemoteMediaStream -> {
+                                    volumeDialogSliderIconProvider.getCastIcon(isMuted)
+                                }
+                                is VolumeDialogSliderType.AudioSharingStream -> {
+                                    volumeDialogSliderIconProvider.getAudioSharingIcon(isMuted)
+                                }
+                                is VolumeDialogSliderType.App ->
+                                    error("App volume has its own state")
                             }
                         }
-                    }
-                },
-                userVolumeUpdates,
-            ) { isDisabledByZenMode, model, icon, currentVolumeUpdate ->
-                val isInGracePeriod =
-                    currentVolumeUpdate != null &&
-                        getTimestampMillis() - currentVolumeUpdate.timestampMillis <
-                            VOLUME_UPDATE_GRACE_PERIOD
-                val isMinimumVolume = model.levelMin == currentVolumeUpdate?.level
-                VolumeDialogSliderStateModel(
-                    value =
-                        if (currentVolumeUpdate != null && isInGracePeriod) {
-                            if (isMinimumVolume) {
-                                model.levelMin.toFloat()
+                    },
+                    userVolumeUpdates,
+                ) { isDisabledByZenMode, model, icon, currentVolumeUpdate ->
+                    val isInGracePeriod =
+                        currentVolumeUpdate != null &&
+                            getTimestampMillis() - currentVolumeUpdate.timestampMillis <
+                                VOLUME_UPDATE_GRACE_PERIOD
+                    val isMinimumVolume = model.levelMin == currentVolumeUpdate?.level
+                    VolumeDialogSliderStateModel(
+                        value =
+                            if (currentVolumeUpdate != null && isInGracePeriod) {
+                                if (isMinimumVolume) {
+                                    model.levelMin.toFloat()
+                                } else {
+                                    currentVolumeUpdate.volume
+                                }
                             } else {
-                                currentVolumeUpdate.volume
-                            }
-                        } else {
-                            if (model.muted) {
-                                model.levelMin.toFloat()
-                            } else {
-                                model.level.toFloat()
-                            }
-                        },
-                    isDisabled = isDisabledByZenMode,
-                    valueRange = model.levelMin.toFloat()..model.levelMax.toFloat(),
-                    icon = icon,
-                    label = model.streamLabel(context),
-                )
-            }
-            .stateIn(coroutineScope, SharingStarted.Eagerly, null)
-            .filterNotNull()
+                                if (model.muted) {
+                                    model.levelMin.toFloat()
+                                } else {
+                                    model.level.toFloat()
+                                }
+                            },
+                        isDisabled = isDisabledByZenMode,
+                        valueRange = model.levelMin.toFloat()..model.levelMax.toFloat(),
+                        icon = icon,
+                        label = model.streamLabel(context),
+                    )
+                }
+                .stateIn(coroutineScope, SharingStarted.Eagerly, null)
+                .filterNotNull()
+
+    private val appState: Flow<VolumeDialogSliderStateModel> =
+        if (sliderType is VolumeDialogSliderType.App) {
+            combine(
+                    interactor.appVolume,
+                    volumeDialogSliderIconProvider.getAppIcon(sliderType.packageName),
+                    userVolumeUpdates,
+                ) { appVolume, icon, currentVolumeUpdate ->
+                    val nativeValue =
+                        if (appVolume.isMuted) APP_VOLUME_MIN else appVolume.volume * APP_VOLUME_MAX
+                    VolumeDialogSliderStateModel(
+                        value = currentVolumeUpdate?.volume ?: nativeValue,
+                        isDisabled = false,
+                        valueRange = APP_VOLUME_MIN..APP_VOLUME_MAX,
+                        icon = icon,
+                        label = sliderType.label,
+                    )
+                }
+                .stateIn(coroutineScope, SharingStarted.Eagerly, null)
+                .filterNotNull()
+        } else {
+            kotlinx.coroutines.flow.emptyFlow()
+        }
+
+    val state: Flow<VolumeDialogSliderStateModel> =
+        if (sliderType is VolumeDialogSliderType.App) appState else streamState
 
     init {
         userVolumeUpdates
             .mapNotNull { it?.level }
             .distinctUntilChanged()
             .onEach { volume ->
-                interactor.setStreamVolume(volume)
-                Events.writeEvent(Events.EVENT_TOUCH_LEVEL_CHANGED, model.first().stream, volume)
+                if (sliderType is VolumeDialogSliderType.App) {
+                    interactor.setAppVolume(volume)
+                } else {
+                    interactor.setStreamVolume(volume)
+                    Events.writeEvent(
+                        Events.EVENT_TOUCH_LEVEL_CHANGED,
+                        model.first().stream,
+                        volume,
+                    )
+                }
             }
             .launchIn(coroutineScope)
     }
@@ -203,5 +242,10 @@ constructor(
 
         val level: Int
             get() = volume.roundToInt()
+    }
+
+    private companion object {
+        const val APP_VOLUME_MIN = 0f
+        const val APP_VOLUME_MAX = 100f
     }
 }

@@ -16,6 +16,8 @@
 
 package com.android.systemui.volume.dialog.sliders.domain.model
 
+import android.media.AudioManager
+
 /** Models different possible audio sliders shown in the Volume Dialog. */
 sealed interface VolumeDialogSliderType {
 
@@ -29,4 +31,8 @@ sealed interface VolumeDialogSliderType {
     data class RemoteMediaStream(override val audioStream: Int) : VolumeDialogSliderType
 
     data class AudioSharingStream(override val audioStream: Int) : VolumeDialogSliderType
+
+    data class App(val packageName: String, val label: String) : VolumeDialogSliderType {
+        override val audioStream: Int = AudioManager.STREAM_MUSIC
+    }
 }
