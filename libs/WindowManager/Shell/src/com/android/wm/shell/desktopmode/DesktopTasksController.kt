@@ -1159,7 +1159,7 @@ class DesktopTasksController(
                 wct.reparent(task.token, tdaInfo.token, /* onTop= */ false)
                 if (forceFullscreen) {
                     wct.setWindowingMode(task.token, WINDOWING_MODE_FULLSCREEN)
-                    wct.setBounds(task.token, null)
+                    wct.setBounds(task.token, Rect())
                 }
             }
             desksOrganizer.removeDesk(wct, deskId, userId)
