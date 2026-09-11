@@ -20,7 +20,6 @@ import android.content.Context
 import android.content.pm.PackageManager.FEATURE_FREEFORM_WINDOW_MANAGEMENT
 import android.hardware.display.DisplayManager
 import android.os.SystemProperties
-import android.os.UserHandle
 import android.provider.Settings
 import android.view.Display
 import android.view.WindowManager
@@ -68,11 +67,10 @@ class DesktopStateImpl(private val context: Context) : DesktopState {
 
     private val isExternalDesktopModeEnabled: Boolean
         get() =
-            Settings.Secure.getIntForUser(
+            Settings.Secure.getInt(
                 context.contentResolver,
                 Settings.Secure.UWU_EXTERNAL_DESKTOP_ENABLED,
                 0,
-                UserHandle.USER_CURRENT,
             ) != 0
 
     override val canEnterDesktopMode: Boolean
