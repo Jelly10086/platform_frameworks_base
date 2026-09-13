@@ -33,4 +33,10 @@
         <xliff:g id="source_app" example="Browser">%1$s</xliff:g> was blocked from opening
         <xliff:g id="target_app" example="Maps">%2$s</xliff:g>
     </string>
+    <string name="clipboard_access_prompt_read_title">Allow clipboard access?</string>
+    <string name="clipboard_access_prompt_read_message">“<xliff:g id="app" example="Notes">%1$s</xliff:g>” wants to access your clipboard.</string>
+    <string name="clipboard_access_prompt_write_title">Allow clipboard changes?</string>
+    <string name="clipboard_access_prompt_write_message">“<xliff:g id="app" example="Notes">%1$s</xliff:g>” wants to write to your clipboard.</string>
+    <string name="clipboard_access_write_permanent_rule">Write permanent rule</string>
+    <string name="clipboard_access_policy_save_failed">The clipboard choice could not be applied. The request remains blocked.</string>
 </resources>

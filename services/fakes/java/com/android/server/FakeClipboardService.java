@@ -162,4 +162,10 @@ public class FakeClipboardService extends IClipboard.Stub {
     public void setClipboardAccessNotificationsEnabledForUser(boolean enable, int userId) {
         throw new UnsupportedOperationException();
     }
+
+    @Override
+    public boolean resolveClipboardAccessPrompt(String packageName, int userId, int operation,
+            int decision, boolean persist) {
+        return false;
+    }
 }

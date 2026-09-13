@@ -54,4 +54,7 @@ interface IClipboard {
     boolean areClipboardAccessNotificationsEnabledForUser(int userId);
 
     void setClipboardAccessNotificationsEnabledForUser(boolean enable, int userId);
+
+    boolean resolveClipboardAccessPrompt(String packageName, int userId, int operation,
+            int decision, boolean persist);
 }
