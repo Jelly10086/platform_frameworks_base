@@ -53,6 +53,7 @@ import android.app.IUriGrantsManager;
 import android.app.KeyguardManager;
 import android.app.UriGrantsManager;
 import android.companion.virtual.VirtualDeviceManager;
+import android.content.ActivityNotFoundException;
 import android.content.BroadcastReceiver;
 import android.content.ClipData;
 import android.content.ClipDescription;
@@ -67,6 +68,7 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.pm.PackageManagerInternal;
 import android.content.pm.UserInfo;
+import android.database.ContentObserver;
 import android.graphics.drawable.Drawable;
 import android.hardware.display.DisplayManager;
 import android.net.Uri;
@@ -97,6 +99,7 @@ import android.util.IntArray;
 import android.util.Pair;
 import android.util.SafetyProtectionUtils;
 import android.util.Slog;
+import android.util.SparseArray;
 import android.util.SparseArrayMap;
 import android.util.SparseBooleanArray;
 import android.util.SparseLongArray;
@@ -110,6 +113,7 @@ import android.view.textclassifier.TextLinks;
 import android.widget.Toast;
 
 import com.android.internal.R;
+import com.android.internal.app.ClipboardAccessPromptActivity;
 import com.android.internal.annotations.GuardedBy;
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.util.FrameworkStatsLog;
@@ -123,9 +127,13 @@ import com.android.server.uri.UriGrantsManagerInternal;
 import com.android.server.wm.WindowManagerInternal;
 
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
+
+import org.json.JSONException;
+import org.json.JSONObject;
 
 /**
  * Implementation of the clipboard for copy and paste.
@@ -163,6 +171,8 @@ public class ClipboardService extends SystemService {
             CLIPBOARD_GET_EVENT_REPORTED__CLIP_DATA_TYPE__MIMETYPE_UNKNOWN
     };
     private static final long ACCESS_NOTIFICATION_SUPPRESSION_TIMEOUT_MILLIS = 1000L;
+    private static final long CLIPBOARD_ACCESS_PROMPT_THROTTLE_MILLIS = 30_000L;
+    private static final long TEMPORARY_CLIPBOARD_ACCESS_DURATION_MILLIS = 10_000L;
 
     private final ActivityManagerInternal mAmInternal;
     private final IUriGrantsManager mUgm;
@@ -193,6 +203,16 @@ public class ClipboardService extends SystemService {
      */
     @GuardedBy("mLock")
     private final SparseLongArray mUserAuthorizedClipAccesses = new SparseLongArray();
+
+    @GuardedBy("mLock")
+    private final SparseArray<ArrayMap<String, Integer>> mClipboardAccessPolicies =
+            new SparseArray<>();
+
+    @GuardedBy("mLock")
+    private final ArrayMap<String, Long> mLastClipboardAccessPrompts = new ArrayMap<>();
+
+    @GuardedBy("mLock")
+    private final ArrayMap<String, Long> mTemporaryClipboardAccessGrants = new ArrayMap<>();
 
     @GuardedBy("mLock")
     private boolean mShowAccessNotifications =
@@ -260,6 +280,22 @@ public class ClipboardService extends SystemService {
         publishBinderService(Context.CLIPBOARD_SERVICE, new ClipboardImpl());
         LocalServices.addService(ClipboardManagerInternal.class, new ClipboardInternalImpl());
         registerVirtualDeviceListener();
+        getContext().getContentResolver().registerContentObserver(
+                Settings.Secure.getUriFor(Settings.Secure.UWU_APP_CLIPBOARD_POLICIES), false,
+                new ContentObserver(mWorkerHandler) {
+                    @Override
+                    public void onChange(boolean selfChange, Uri uri, int userId) {
+                        synchronized (mLock) {
+                            if (userId >= UserHandle.USER_SYSTEM) {
+                                mClipboardAccessPolicies.remove(userId);
+                            } else {
+                                mClipboardAccessPolicies.clear();
+                            }
+                            mLastClipboardAccessPrompts.clear();
+                            mTemporaryClipboardAccessGrants.clear();
+                        }
+                    }
+                }, UserHandle.USER_ALL);
     }
 
     private void registerVirtualDeviceListener() {
@@ -282,7 +318,11 @@ public class ClipboardService extends SystemService {
     @Override
     public void onUserStopped(@NonNull TargetUser user) {
         synchronized (mLock) {
-            mClipboards.delete(user.getUserIdentifier());
+            final int userId = user.getUserIdentifier();
+            mClipboards.delete(userId);
+            mClipboardAccessPolicies.remove(userId);
+            mLastClipboardAccessPrompts.clear();
+            mTemporaryClipboardAccessGrants.clear();
         }
     }
 
@@ -299,6 +339,179 @@ public class ClipboardService extends SystemService {
             mMaxClassificationLength = DeviceConfig.getInt(DeviceConfig.NAMESPACE_CLIPBOARD,
                     PROPERTY_MAX_CLASSIFICATION_LENGTH, DEFAULT_MAX_CLASSIFICATION_LENGTH);
         }
+    }
+
+    private boolean clipboardAccessAllowedByUserPolicy(int operation, String packageName,
+            int uid, @UserIdInt int userId) {
+        return clipboardAccessAllowedByUserPolicy(operation, packageName, uid, userId, true);
+    }
+
+    private boolean clipboardAccessAllowedByUserPolicy(int operation, String packageName,
+            int uid, @UserIdInt int userId, boolean showPrompt) {
+        if (!UserHandle.isApp(uid)) {
+            return true;
+        }
+        final String accessKey = clipboardAccessKey(userId, packageName, operation);
+        synchronized (mLock) {
+            final Long grantExpiresAt = mTemporaryClipboardAccessGrants.get(accessKey);
+            if (grantExpiresAt != null) {
+                if (grantExpiresAt >= SystemClock.elapsedRealtime()) {
+                    return true;
+                }
+                mTemporaryClipboardAccessGrants.remove(accessKey);
+            }
+        }
+        final int policy = getClipboardAccessPolicy(userId, packageName);
+        if (policy == Settings.Secure.UWU_APP_CLIPBOARD_POLICY_ALLOW) {
+            return true;
+        }
+        if (showPrompt && policy == Settings.Secure.UWU_APP_CLIPBOARD_POLICY_ASK) {
+            showClipboardAccessPrompt(operation, packageName, userId);
+        }
+        return false;
+    }
+
+    private static String clipboardAccessKey(@UserIdInt int userId, String packageName,
+            int operation) {
+        final int promptOperation = operation == AppOpsManager.OP_WRITE_CLIPBOARD
+                ? ClipboardAccessPromptActivity.OPERATION_WRITE
+                : ClipboardAccessPromptActivity.OPERATION_READ;
+        return userId + ":" + packageName + ":" + promptOperation;
+    }
+
+    private boolean resolveClipboardAccessPrompt(String packageName, @UserIdInt int userId,
+            int operation, int decision, boolean persist) {
+        if (Binder.getCallingUid() != Process.SYSTEM_UID) {
+            throw new SecurityException("Only the system UI process may resolve clipboard access");
+        }
+        if (packageName == null || userId < UserHandle.USER_SYSTEM
+                || (operation != ClipboardAccessPromptActivity.OPERATION_READ
+                        && operation != ClipboardAccessPromptActivity.OPERATION_WRITE)
+                || (decision != Settings.Secure.UWU_APP_CLIPBOARD_POLICY_ALLOW
+                        && decision != Settings.Secure.UWU_APP_CLIPBOARD_POLICY_ASK
+                        && decision != Settings.Secure.UWU_APP_CLIPBOARD_POLICY_DENY)) {
+            throw new IllegalArgumentException("Invalid clipboard access prompt result");
+        }
+
+        final int appOp = operation == ClipboardAccessPromptActivity.OPERATION_WRITE
+                ? AppOpsManager.OP_WRITE_CLIPBOARD : AppOpsManager.OP_READ_CLIPBOARD;
+        final String accessKey = clipboardAccessKey(userId, packageName, appOp);
+        synchronized (mLock) {
+            mLastClipboardAccessPrompts.remove(userId + ":" + packageName);
+            if (!persist) {
+                if (decision == Settings.Secure.UWU_APP_CLIPBOARD_POLICY_ALLOW) {
+                    mTemporaryClipboardAccessGrants.put(accessKey,
+                            SystemClock.elapsedRealtime()
+                                    + TEMPORARY_CLIPBOARD_ACCESS_DURATION_MILLIS);
+                }
+                return true;
+            }
+        }
+
+        final long token = Binder.clearCallingIdentity();
+        final ArrayMap<String, Integer> policies;
+        final boolean saved;
+        try {
+            policies = parseClipboardAccessPolicies(Settings.Secure.getStringForUser(
+                    getContext().getContentResolver(),
+                    Settings.Secure.UWU_APP_CLIPBOARD_POLICIES, userId));
+            if (decision == Settings.Secure.UWU_APP_CLIPBOARD_POLICY_DENY) {
+                policies.put(packageName, decision);
+            } else {
+                policies.remove(packageName);
+            }
+            final JSONObject object = new JSONObject();
+            for (int index = 0; index < policies.size(); index++) {
+                object.put(policies.keyAt(index), policies.valueAt(index));
+            }
+            saved = Settings.Secure.putStringForUser(getContext().getContentResolver(),
+                    Settings.Secure.UWU_APP_CLIPBOARD_POLICIES,
+                    policies.isEmpty() ? null : object.toString(), userId);
+        } catch (JSONException impossible) {
+            throw new AssertionError(impossible);
+        } finally {
+            Binder.restoreCallingIdentity(token);
+        }
+        if (saved) {
+            synchronized (mLock) {
+                mClipboardAccessPolicies.put(userId, policies);
+                mTemporaryClipboardAccessGrants.remove(clipboardAccessKey(userId, packageName,
+                        AppOpsManager.OP_READ_CLIPBOARD));
+                mTemporaryClipboardAccessGrants.remove(clipboardAccessKey(userId, packageName,
+                        AppOpsManager.OP_WRITE_CLIPBOARD));
+            }
+        }
+        return saved;
+    }
+
+    private int getClipboardAccessPolicy(@UserIdInt int userId, String packageName) {
+        synchronized (mLock) {
+            ArrayMap<String, Integer> policies = mClipboardAccessPolicies.get(userId);
+            if (policies == null) {
+                final long token = Binder.clearCallingIdentity();
+                try {
+                    policies = parseClipboardAccessPolicies(Settings.Secure.getStringForUser(
+                            getContext().getContentResolver(),
+                            Settings.Secure.UWU_APP_CLIPBOARD_POLICIES, userId));
+                } finally {
+                    Binder.restoreCallingIdentity(token);
+                }
+                mClipboardAccessPolicies.put(userId, policies);
+            }
+            return policies.getOrDefault(packageName,
+                    Settings.Secure.UWU_APP_CLIPBOARD_POLICY_ALLOW);
+        }
+    }
+
+    private void showClipboardAccessPrompt(int operation, String packageName,
+            @UserIdInt int userId) {
+        final String promptKey = userId + ":" + packageName;
+        final long now = SystemClock.elapsedRealtime();
+        synchronized (mLock) {
+            final Long lastPrompt = mLastClipboardAccessPrompts.get(promptKey);
+            if (lastPrompt != null
+                    && now - lastPrompt < CLIPBOARD_ACCESS_PROMPT_THROTTLE_MILLIS) {
+                return;
+            }
+            mLastClipboardAccessPrompts.put(promptKey, now);
+        }
+
+        final int promptOperation = operation == AppOpsManager.OP_WRITE_CLIPBOARD
+                ? ClipboardAccessPromptActivity.OPERATION_WRITE
+                : ClipboardAccessPromptActivity.OPERATION_READ;
+        final Intent intent = ClipboardAccessPromptActivity.createIntent(
+                getContext(), userId, packageName, promptOperation);
+        mWorkerHandler.post(() -> {
+            try {
+                getContext().startActivityAsUser(intent, UserHandle.of(userId));
+            } catch (ActivityNotFoundException | SecurityException e) {
+                Slog.e(TAG, "Unable to show clipboard access prompt for " + packageName, e);
+            }
+        });
+    }
+
+    @VisibleForTesting
+    static ArrayMap<String, Integer> parseClipboardAccessPolicies(@Nullable String value) {
+        final ArrayMap<String, Integer> policies = new ArrayMap<>();
+        if (value == null || value.isBlank()) {
+            return policies;
+        }
+        try {
+            final JSONObject object = new JSONObject(value);
+            final Iterator<String> keys = object.keys();
+            while (keys.hasNext()) {
+                final String packageName = keys.next();
+                final int policy = object.optInt(packageName,
+                        Settings.Secure.UWU_APP_CLIPBOARD_POLICY_ALLOW);
+                if (policy == Settings.Secure.UWU_APP_CLIPBOARD_POLICY_ASK
+                        || policy == Settings.Secure.UWU_APP_CLIPBOARD_POLICY_DENY) {
+                    policies.put(packageName, policy);
+                }
+            }
+        } catch (JSONException e) {
+            Slog.w(TAG, "Ignoring malformed app clipboard policy", e);
+        }
+        return policies;
     }
 
     private class ListenerInfo {
@@ -585,6 +798,13 @@ public class ClipboardService extends SystemService {
             }
         }
 
+        @Override
+        public boolean resolveClipboardAccessPrompt(String packageName, int userId, int operation,
+                int decision, boolean persist) {
+            return ClipboardService.this.resolveClipboardAccessPrompt(
+                    packageName, userId, operation, decision, persist);
+        }
+
         private int getDefaultClipboardAccessNotificationsSetting() {
             return DeviceConfig.getBoolean(DeviceConfig.NAMESPACE_CLIPBOARD,
                     ClipboardManager.DEVICE_CONFIG_SHOW_ACCESS_NOTIFICATIONS,
@@ -610,7 +830,12 @@ public class ClipboardService extends SystemService {
                     attributionTag,
                     intendingUid,
                     intendingUserId,
-                    intendingDeviceId)) {
+                    intendingDeviceId)
+                    || !clipboardAccessAllowedByUserPolicy(
+                            AppOpsManager.OP_WRITE_CLIPBOARD,
+                            callingPackage,
+                            intendingUid,
+                            intendingUserId)) {
                 return;
             }
             checkDataOwner(clip, intendingUid);
@@ -662,7 +887,12 @@ public class ClipboardService extends SystemService {
                     attributionTag,
                     intendingUid,
                     intendingUserId,
-                    intendingDeviceId)) {
+                    intendingDeviceId)
+                    || !clipboardAccessAllowedByUserPolicy(
+                            AppOpsManager.OP_WRITE_CLIPBOARD,
+                            callingPackage,
+                            intendingUid,
+                            intendingUserId)) {
                 return;
             }
             synchronized (mLock) {
@@ -685,7 +915,12 @@ public class ClipboardService extends SystemService {
                             intendingUid,
                             intendingUserId,
                             intendingDeviceId)
-                    || isDeviceLocked(intendingUserId, deviceId)) {
+                    || isDeviceLocked(intendingUserId, deviceId)
+                    || !clipboardAccessAllowedByUserPolicy(
+                            AppOpsManager.OP_READ_CLIPBOARD,
+                            pkg,
+                            intendingUid,
+                            intendingUserId)) {
                 return null;
             }
             synchronized (mLock) {
@@ -728,7 +963,12 @@ public class ClipboardService extends SystemService {
                             intendingUserId,
                             intendingDeviceId,
                             false)
-                    || isDeviceLocked(intendingUserId, deviceId)) {
+                    || isDeviceLocked(intendingUserId, deviceId)
+                    || !clipboardAccessAllowedByUserPolicy(
+                            AppOpsManager.OP_READ_CLIPBOARD,
+                            callingPackage,
+                            intendingUid,
+                            intendingUserId)) {
                 return null;
             }
             synchronized (mLock) {
@@ -752,7 +992,12 @@ public class ClipboardService extends SystemService {
                             intendingUserId,
                             intendingDeviceId,
                             false)
-                    || isDeviceLocked(intendingUserId, deviceId)) {
+                    || isDeviceLocked(intendingUserId, deviceId)
+                    || !clipboardAccessAllowedByUserPolicy(
+                            AppOpsManager.OP_READ_CLIPBOARD,
+                            callingPackage,
+                            intendingUid,
+                            intendingUserId)) {
                 return false;
             }
             synchronized (mLock) {
@@ -827,7 +1072,12 @@ public class ClipboardService extends SystemService {
                             intendingUserId,
                             intendingDeviceId,
                             false)
-                    || isDeviceLocked(intendingUserId, deviceId)) {
+                    || isDeviceLocked(intendingUserId, deviceId)
+                    || !clipboardAccessAllowedByUserPolicy(
+                            AppOpsManager.OP_READ_CLIPBOARD,
+                            callingPackage,
+                            intendingUid,
+                            intendingUserId)) {
                 return false;
             }
             synchronized (mLock) {
@@ -856,7 +1106,12 @@ public class ClipboardService extends SystemService {
                             intendingUserId,
                             intendingDeviceId,
                             false)
-                    || isDeviceLocked(intendingUserId, deviceId)) {
+                    || isDeviceLocked(intendingUserId, deviceId)
+                    || !clipboardAccessAllowedByUserPolicy(
+                            AppOpsManager.OP_READ_CLIPBOARD,
+                            callingPackage,
+                            intendingUid,
+                            intendingUserId)) {
                 return null;
             }
             synchronized (mLock) {
@@ -1104,7 +1359,13 @@ public class ClipboardService extends SystemService {
                             li.mAttributionTag,
                             li.mUid,
                             UserHandle.getUserId(li.mUid),
-                            clipboard.deviceId)) {
+                            clipboard.deviceId)
+                            && clipboardAccessAllowedByUserPolicy(
+                                    AppOpsManager.OP_READ_CLIPBOARD,
+                                    li.mPackageName,
+                                    li.mUid,
+                                    UserHandle.getUserId(li.mUid),
+                                    false)) {
                         clipboard.primaryClipListeners.getBroadcastItem(i)
                                 .dispatchPrimaryClipChanged();
                     }
