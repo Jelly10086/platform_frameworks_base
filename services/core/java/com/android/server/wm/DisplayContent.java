@@ -2699,7 +2699,10 @@ class DisplayContent extends RootDisplayArea implements WindowManagerPolicy.Disp
         mDisplayInfo.rotation = rotation;
         mDisplayInfo.logicalWidth = dw;
         mDisplayInfo.logicalHeight = dh;
-        mDisplayInfo.logicalDensityDpi = mBaseDisplayDensity;
+        mDisplayInfo.logicalDensityDpi = isUwuScrcpyDesktopDisplay()
+                ? DesktopModeHelper.getProjectedDesktopDensity(
+                        dw, dh, mBaseDisplayDensity)
+                : mBaseDisplayDensity;
         mDisplayInfo.physicalXDpi = mBaseDisplayPhysicalXDpi;
         mDisplayInfo.physicalYDpi = mBaseDisplayPhysicalYDpi;
         mDisplayInfo.appWidth = dw;
@@ -6164,8 +6167,7 @@ class DisplayContent extends RootDisplayArea implements WindowManagerPolicy.Disp
             return false;
         }
         final int type = mDisplay.getType();
-        final boolean isScrcpyVirtualDisplay = type == Display.TYPE_VIRTUAL
-                && mDisplay.getName().toLowerCase(Locale.ROOT).contains("scrcpy");
+        final boolean isScrcpyVirtualDisplay = isScrcpyVirtualDisplay();
         if (isScrcpyVirtualDisplay
                 && !DesktopModeHelper.isScrcpyVirtualDisplayAllowed(mWmService.mContext)) {
             return false;
@@ -6177,6 +6179,20 @@ class DisplayContent extends RootDisplayArea implements WindowManagerPolicy.Disp
                         && ((mDisplay.getFlags() & FLAG_SHOULD_SHOW_SYSTEM_DECORATIONS) != 0
                                 || (mDisplay.getFlags() & Display.FLAG_PRESENTATION) != 0
                                 || isScrcpyVirtualDisplay));
+    }
+
+    boolean isUwuScrcpyDesktopDisplay() {
+        return DesktopModeHelper.isExternalDesktopModeEnabled(mWmService.mContext)
+                && DesktopModeHelper.isScrcpyVirtualDisplayAllowed(mWmService.mContext)
+                && !isDefaultDisplay
+                && !isPrivate()
+                && isTrusted()
+                && isScrcpyVirtualDisplay();
+    }
+
+    private boolean isScrcpyVirtualDisplay() {
+        return mDisplay.getType() == Display.TYPE_VIRTUAL
+                && mDisplay.getName().toLowerCase(Locale.ROOT).contains("scrcpy");
     }
 
     /**

@@ -28,6 +28,7 @@ import android.platform.test.annotations.DisableFlags;
 import android.platform.test.annotations.EnableFlags;
 import android.platform.test.annotations.Presubmit;
 import android.platform.test.flag.junit.SetFlagsRule;
+import android.view.Surface;
 import android.window.DesktopExperienceFlags;
 import android.window.DesktopModeFlags;
 
@@ -245,6 +246,28 @@ public class DesktopModeHelperTest {
         );
 
         assertThat(DesktopModeHelper.isDeviceEligibleForDesktopMode(mMockContext)).isTrue();
+    }
+
+    @Test
+    public void getProjectedDesktopDensity_phoneDensity_usesTabletConfiguration() {
+        assertThat(DesktopModeHelper.getProjectedDesktopDensity(1080, 1920, 420)).isEqualTo(240);
+    }
+
+    @Test
+    public void getProjectedDesktopDensity_tabletDensity_keepsOriginalDensity() {
+        assertThat(DesktopModeHelper.getProjectedDesktopDensity(1600, 2560, 240)).isEqualTo(240);
+    }
+
+    @Test
+    public void getProjectedDesktopRotation_portraitDisplay_rotatesToLandscape() {
+        assertThat(DesktopModeHelper.getProjectedDesktopRotation(1080, 1920))
+                .isEqualTo(Surface.ROTATION_90);
+    }
+
+    @Test
+    public void getProjectedDesktopRotation_landscapeDisplay_keepsNaturalRotation() {
+        assertThat(DesktopModeHelper.getProjectedDesktopRotation(1920, 1080))
+                .isEqualTo(Surface.ROTATION_0);
     }
 
     private void resetEnforceDeviceRestriction() throws Exception {

@@ -1690,6 +1690,11 @@ public class DisplayRotation {
 
     @Surface.Rotation
     private int getUserRotationOverride() {
+        if (mDisplayContent.isUwuScrcpyDesktopDisplay()) {
+            return DesktopModeHelper.getProjectedDesktopRotation(
+                    mDisplayContent.mInitialDisplayWidth,
+                    mDisplayContent.mInitialDisplayHeight);
+        }
         final int userRotationOverride = getDemoUserRotationOverride();
         if (userRotationOverride == Surface.ROTATION_0) {
             return userRotationOverride;
