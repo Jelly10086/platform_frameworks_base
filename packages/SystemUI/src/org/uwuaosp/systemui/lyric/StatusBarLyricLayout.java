@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package com.android.systemui.util;
+package org.uwuaosp.systemui.lyric;
 
 import android.content.Context;
 import android.util.AttributeSet;

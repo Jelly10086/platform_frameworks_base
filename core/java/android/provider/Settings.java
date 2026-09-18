@@ -14734,14 +14734,14 @@ public final class Settings {
                 "status_bar_lyric_hide_icon_clock_right";
 
         /**
-         * Semicolon-separated package names allowed to provide status bar lyrics.
-         * An empty value denies all packages.
+         * Semicolon-separated HTTPS base URLs for custom lyric sources. Each source must provide
+         * GET /search?title=&artist=&durationMs= and GET /lyric?id= endpoints. An empty value uses
+         * the built-in NetEase Cloud Music source.
          *
          * @hide
          */
         @Readable
-        public static final String STATUS_BAR_LYRIC_ALLOWED_PACKAGES =
-                "status_bar_lyric_allowed_packages";
+        public static final String STATUS_BAR_LYRIC_SOURCES = "status_bar_lyric_sources";
 
         /**
          * Whether connected external displays use the system desktop experience.

@@ -40,7 +40,7 @@
             android:scaleType="centerInside" />
     </ImageSwitcher>
 
-    <com.android.systemui.util.StatusBarLyricLayout
+    <org.uwuaosp.systemui.lyric.StatusBarLyricLayout
         android:layout_width="0dp"
         android:layout_height="match_parent"
         android:layout_weight="1"
@@ -52,12 +52,12 @@
             android:layout_width="match_parent"
             android:layout_height="0dp"
             android:layout_weight="14">
-            <com.android.systemui.util.LyricTextView
+            <org.uwuaosp.systemui.lyric.LyricTextView
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
                 android:maxLines="1"
                 android:textAppearance="@style/TextApperance.StatusBar.Lyric" />
-            <com.android.systemui.util.LyricTextView
+            <org.uwuaosp.systemui.lyric.LyricTextView
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
                 android:maxLines="1"
@@ -70,16 +70,16 @@
             android:layout_height="0dp"
             android:layout_weight="10"
             android:visibility="gone">
-            <com.android.systemui.util.LyricTextView
+            <org.uwuaosp.systemui.lyric.LyricTextView
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
                 android:maxLines="1"
                 android:textAppearance="@style/TextApperance.StatusBar.Lyric.Translation" />
-            <com.android.systemui.util.LyricTextView
+            <org.uwuaosp.systemui.lyric.LyricTextView
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
                 android:maxLines="1"
                 android:textAppearance="@style/TextApperance.StatusBar.Lyric.Translation" />
         </TextSwitcher>
-    </com.android.systemui.util.StatusBarLyricLayout>
+    </org.uwuaosp.systemui.lyric.StatusBarLyricLayout>
 </LinearLayout>
