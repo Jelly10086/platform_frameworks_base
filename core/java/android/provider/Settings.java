@@ -14735,8 +14735,9 @@ public final class Settings {
 
         /**
          * Semicolon-separated HTTPS base URLs for custom lyric sources. Each source must provide
-         * GET /search?title=&artist=&durationMs= and GET /lyric?id= endpoints. An empty value uses
-         * the built-in NetEase Cloud Music source.
+         * GET /v1/lyrics?title=&artist=&album=&durationMs=&sourcePackage=&mediaId= and return
+         * the standard lyric payload. An empty value uses the default remote source followed by
+         * the built-in lyric provider fallback.
          *
          * @hide
          */

@@ -322,24 +322,15 @@ public abstract class LyricViewController implements DarkIconDispatcher.DarkRece
             return;
         }
         MediaController activeController = null;
-        MediaController currentController = null;
-        MediaController fallbackController = null;
+        int activeScore = Integer.MIN_VALUE;
         if (controllers != null) {
             for (MediaController controller : controllers) {
-                if (isSameSession(controller, mCurrentMediaController)) {
-                    currentController = controller;
-                }
-                if (fallbackController == null) {
-                    fallbackController = controller;
-                }
-                if (isPlaybackActive(controller.getPlaybackState())) {
+                int score = scoreSession(controller);
+                if (score > activeScore) {
                     activeController = controller;
-                    break;
+                    activeScore = score;
                 }
             }
-        }
-        if (activeController == null) {
-            activeController = currentController != null ? currentController : fallbackController;
         }
         if (isSameSession(activeController, mCurrentMediaController)) {
             updateCurrentSession();
@@ -358,6 +349,33 @@ public abstract class LyricViewController implements DarkIconDispatcher.DarkRece
 
         mCurrentMediaController.registerCallback(mMediaCallback, mHandler);
         updateCurrentSession();
+    }
+
+    private int scoreSession(MediaController controller) {
+        if (controller == null) {
+            return Integer.MIN_VALUE;
+        }
+        int score = 0;
+        if (isPlaybackActive(controller.getPlaybackState())) {
+            score += 1_000;
+        }
+        MediaMetadata metadata = controller.getMetadata();
+        if (metadata == null) {
+            return score;
+        }
+        if (!TextUtils.isEmpty(metadata.getString(MediaMetadata.METADATA_KEY_TITLE))) {
+            score += 100;
+        }
+        if (!TextUtils.isEmpty(metadata.getString(MediaMetadata.METADATA_KEY_MEDIA_ID))) {
+            score += 50;
+        }
+        if (!TextUtils.isEmpty(metadata.getString(MediaMetadata.METADATA_KEY_ALBUM))) {
+            score += 25;
+        }
+        if (!TextUtils.isEmpty(metadata.getString(MediaMetadata.METADATA_KEY_ARTIST))) {
+            score += 10;
+        }
+        return score;
     }
 
     private boolean isPlaybackActive(PlaybackState state) {
@@ -405,16 +423,20 @@ public abstract class LyricViewController implements DarkIconDispatcher.DarkRece
             stopLyric();
             return;
         }
+        String packageName = mCurrentMediaController.getPackageName();
+        String mediaId = metadata.getString(MediaMetadata.METADATA_KEY_MEDIA_ID);
         String artist = metadata.getString(MediaMetadata.METADATA_KEY_ARTIST);
         if (TextUtils.isEmpty(artist)) {
             artist = metadata.getString(MediaMetadata.METADATA_KEY_ALBUM_ARTIST);
         }
+        String album = metadata.getString(MediaMetadata.METADATA_KEY_ALBUM);
         long durationMs = metadata.containsKey(MediaMetadata.METADATA_KEY_DURATION)
                 ? metadata.getLong(MediaMetadata.METADATA_KEY_DURATION) : 0;
         String sourceSetting = Settings.Secure.getStringForUser(mContext.getContentResolver(),
                 Settings.Secure.STATUS_BAR_LYRIC_SOURCES, mUserTracker.getUserId());
-        String trackKey = title + "\u0000" + artist + "\u0000" + durationMs
-                + "\u0000" + sourceSetting;
+        LyricSource.Track track = new LyricSource.Track(
+                packageName, mediaId, title, artist, album, durationMs);
+        String trackKey = track.getKey() + "\u0000" + sourceSetting;
         if (TextUtils.equals(mCurrentTrackKey, trackKey)) {
             updateDisplayedLyric();
             return;
@@ -430,9 +452,7 @@ public abstract class LyricViewController implements DarkIconDispatcher.DarkRece
         mCurrentLyrics = null;
         stopLyric();
         final MediaController requestedController = mCurrentMediaController;
-        final String requestedTitle = title;
-        final String requestedArtist = artist;
-        final long requestedDurationMs = durationMs;
+        final LyricSource.Track requestedTrack = track;
         final String requestedSourceSetting = sourceSetting;
         final long fetchGeneration = mFetchGeneration;
         mPendingFetch = mLyricExecutor.submit(() -> {
@@ -441,7 +461,7 @@ public abstract class LyricViewController implements DarkIconDispatcher.DarkRece
                 if (Thread.currentThread().isInterrupted()) {
                     return;
                 }
-                lyrics = source.fetch(requestedTitle, requestedArtist, requestedDurationMs);
+                lyrics = source.fetch(requestedTrack);
                 if (lyrics != null) {
                     break;
                 }

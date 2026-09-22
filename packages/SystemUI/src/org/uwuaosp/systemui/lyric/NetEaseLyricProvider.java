@@ -42,6 +42,7 @@ import java.util.regex.Pattern;
 /** Fetches and parses lyrics from the public NetEase Cloud Music endpoints. */
 final class NetEaseLyricProvider implements LyricSource {
     private static final String TAG = "NetEaseLyricProvider";
+    private static final String NETEASE_PACKAGE = "com.netease.cloudmusic";
     private static final String SEARCH_ENDPOINT =
             "https://music.163.com/api/search/get/web?s=%s&type=1&offset=0&total=true&limit=10";
     private static final String LYRIC_ENDPOINT =
@@ -59,17 +60,27 @@ final class NetEaseLyricProvider implements LyricSource {
     }
 
     @Override
-    public LyricSource.Lyrics fetch(String title, String artist, long durationMs) {
-        if (TextUtils.isEmpty(title)) {
+    public LyricSource.Lyrics fetch(LyricSource.Track track) {
+        if (track == null) {
             return null;
         }
 
         try {
-            String query = TextUtils.isEmpty(artist) ? title : title + " " + artist;
+            Long mediaId = parseMediaId(track);
+            if (mediaId != null) {
+                String lyricJson = request(String.format(Locale.ROOT, LYRIC_ENDPOINT, mediaId));
+                return parseLyrics(new JSONObject(lyricJson));
+            }
+            if (TextUtils.isEmpty(track.title)) {
+                return null;
+            }
+            String query = TextUtils.isEmpty(track.artist)
+                    ? track.title : track.title + " " + track.artist;
             String searchJson = request(String.format(Locale.ROOT, SEARCH_ENDPOINT,
                     URLEncoder.encode(query, StandardCharsets.UTF_8.name())));
             List<JSONObject> songs = findMatchingSongs(
-                    new JSONObject(searchJson), title, artist, durationMs);
+                    new JSONObject(searchJson), track.title, track.artist, track.album,
+                    track.durationMs);
             if (songs.isEmpty()) {
                 return null;
             }
@@ -88,13 +99,13 @@ final class NetEaseLyricProvider implements LyricSource {
             }
             return null;
         } catch (IOException | JSONException | RuntimeException e) {
-            Log.w(TAG, "Unable to fetch lyrics for " + title, e);
+            Log.w(TAG, "Unable to fetch lyrics for " + track.title, e);
             return null;
         }
     }
 
     private static List<JSONObject> findMatchingSongs(JSONObject response, String title,
-            String artist, long durationMs) throws JSONException {
+            String artist, String album, long durationMs) throws JSONException {
         JSONObject result = response.optJSONObject("result");
         if (result == null) {
             return new ArrayList<>();
@@ -110,12 +121,29 @@ final class NetEaseLyricProvider implements LyricSource {
             if (song == null || !isTitleMatch(song.optString("name", ""), title)) {
                 continue;
             }
+            if (!isMetadataMatch(song, artist, album)) {
+                continue;
+            }
             matchingSongs.add(song);
         }
         matchingSongs.sort((first, second) -> Integer.compare(
-                scoreSong(second, title, artist, durationMs),
-                scoreSong(first, title, artist, durationMs)));
+                scoreSong(second, title, artist, album, durationMs),
+                scoreSong(first, title, artist, album, durationMs)));
         return matchingSongs;
+    }
+
+    private static Long parseMediaId(LyricSource.Track track) {
+        if (!NETEASE_PACKAGE.equals(track.packageName)
+                || TextUtils.isEmpty(track.mediaId)
+                || !track.mediaId.matches("[0-9]+")) {
+            return null;
+        }
+        try {
+            long mediaId = Long.parseLong(track.mediaId);
+            return mediaId > 0 ? mediaId : null;
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     private static boolean isTitleMatch(String candidate, String requested) {
@@ -126,13 +154,38 @@ final class NetEaseLyricProvider implements LyricSource {
                 || normalizedRequested.contains(normalizedCandidate));
     }
 
-    private static int scoreSong(JSONObject song, String title, String artist, long durationMs) {
+    private static boolean isMetadataMatch(JSONObject song, String artist, String album) {
+        String songArtist = getArtistNames(song.optJSONArray("artists"));
+        String songAlbum = song.optJSONObject("album") == null
+                ? "" : song.optJSONObject("album").optString("name", "");
+        if (!TextUtils.isEmpty(artist) && !TextUtils.isEmpty(songArtist)
+                && !metadataMatches(artist, songArtist)) {
+            return false;
+        }
+        return TextUtils.isEmpty(album) || TextUtils.isEmpty(songAlbum)
+                || metadataMatches(album, songAlbum);
+    }
+
+    private static boolean metadataMatches(String requested, String candidate) {
+        String normalizedRequested = normalize(requested);
+        String normalizedCandidate = normalize(candidate);
+        return normalizedRequested.equals(normalizedCandidate)
+                || normalizedRequested.contains(normalizedCandidate)
+                || normalizedCandidate.contains(normalizedRequested);
+    }
+
+    private static int scoreSong(JSONObject song, String title, String artist, String album,
+            long durationMs) {
         String songTitle = song.optString("name", "");
         String songArtist = getArtistNames(song.optJSONArray("artists"));
         String normalizedTitle = normalize(title);
         String normalizedSongTitle = normalize(songTitle);
         String normalizedArtist = normalize(artist);
         String normalizedSongArtist = normalize(songArtist);
+        String songAlbum = song.optJSONObject("album") == null
+                ? "" : song.optJSONObject("album").optString("name", "");
+        String normalizedAlbum = normalize(album);
+        String normalizedSongAlbum = normalize(songAlbum);
         int score = 0;
 
         if (TextUtils.equals(normalizedTitle, normalizedSongTitle)) {
@@ -147,6 +200,14 @@ final class NetEaseLyricProvider implements LyricSource {
             } else if (normalizedSongArtist.contains(normalizedArtist)
                     || normalizedArtist.contains(normalizedSongArtist)) {
                 score += 20;
+            }
+        }
+        if (!TextUtils.isEmpty(normalizedAlbum) && !TextUtils.isEmpty(normalizedSongAlbum)) {
+            if (TextUtils.equals(normalizedAlbum, normalizedSongAlbum)) {
+                score += 20;
+            } else if (normalizedSongAlbum.contains(normalizedAlbum)
+                    || normalizedAlbum.contains(normalizedSongAlbum)) {
+                score += 10;
             }
         }
         long songDurationMs = song.optLong("duration", 0);

@@ -22,6 +22,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 final class LyricSourceFactory {
+    private static final String DEFAULT_LYRIC_SOURCE_URL =
+            "https://api.uwuaosp.uwuniverse.org";
+
     private LyricSourceFactory() {
     }
 
@@ -34,6 +37,8 @@ final class LyricSourceFactory {
                     sources.add(new HttpLyricSource(source));
                 }
             }
+        } else {
+            sources.add(new HttpLyricSource(DEFAULT_LYRIC_SOURCE_URL));
         }
         sources.add(new NetEaseLyricProvider());
         return sources;

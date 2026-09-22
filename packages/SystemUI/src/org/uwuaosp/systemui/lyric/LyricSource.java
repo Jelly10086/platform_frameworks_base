@@ -18,7 +18,32 @@ package org.uwuaosp.systemui.lyric;
 
 /** A source that resolves a media track to timestamped lyrics. */
 interface LyricSource {
-    Lyrics fetch(String title, String artist, long durationMs);
+    Lyrics fetch(Track track);
+
+    final class Track {
+        final String packageName;
+        final String mediaId;
+        final String title;
+        final String artist;
+        final String album;
+        final long durationMs;
+
+        Track(String packageName, String mediaId, String title, String artist, String album,
+                long durationMs) {
+            this.packageName = packageName;
+            this.mediaId = mediaId;
+            this.title = title;
+            this.artist = artist;
+            this.album = album;
+            this.durationMs = durationMs;
+        }
+
+        String getKey() {
+            return String.valueOf(packageName) + "\u0000" + String.valueOf(mediaId)
+                    + "\u0000" + String.valueOf(title) + "\u0000" + String.valueOf(artist)
+                    + "\u0000" + String.valueOf(album) + "\u0000" + durationMs;
+        }
+    }
 
     final class Lyrics {
         private final java.util.TreeMap<Long, Cue> mCues;
