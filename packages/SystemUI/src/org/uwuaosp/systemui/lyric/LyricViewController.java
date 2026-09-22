@@ -75,6 +75,7 @@ public abstract class LyricViewController implements DarkIconDispatcher.DarkRece
     private final ComponentName mNotificationListenerComponent;
     private final ContrastColorUtil mNotificationColorUtil;
     private final UserTracker mUserTracker;
+    private static volatile LyricViewController sDebugController;
 
     private final MediaSessionManager.OnActiveSessionsChangedListener mSessionsChangedListener =
             this::onActiveSessionsChanged;
@@ -101,8 +102,8 @@ public abstract class LyricViewController implements DarkIconDispatcher.DarkRece
     };
     private final Runnable mPositionUpdateRunnable = () -> {
         updateDisplayedLyric();
-        if (mEnabled && mCurrentMediaController != null
-                && isPlaybackActive(mCurrentMediaController.getPlaybackState())) {
+        if (mDebugLyrics != null || (mEnabled && mCurrentMediaController != null
+                && isPlaybackActive(mCurrentMediaController.getPlaybackState()))) {
             mHandler.postDelayed(mPositionUpdateRunnable, POSITION_UPDATE_INTERVAL_MS);
         }
     };
@@ -153,6 +154,8 @@ public abstract class LyricViewController implements DarkIconDispatcher.DarkRece
     private Future<?> mPendingFetch;
     private long mFetchGeneration;
     private int mFetchRetryCount;
+    private LyricSource.Lyrics mDebugLyrics;
+    private long mDebugStartElapsedRealtime;
     private boolean mEnabled;
     private boolean mStarted;
     private boolean mShowOnClockRight;
@@ -212,6 +215,7 @@ public abstract class LyricViewController implements DarkIconDispatcher.DarkRece
         mUserTracker.addCallback(mUserChangedCallback, command -> mHandler.post(command));
         registerSessionListener();
         registerLyricSourcesObserver();
+        sDebugController = this;
     }
 
     public void destroy() {
@@ -227,6 +231,9 @@ public abstract class LyricViewController implements DarkIconDispatcher.DarkRece
         }
         cancelPendingFetch();
         detachCurrentController();
+        if (sDebugController == this) {
+            sDebugController = null;
+        }
         mLyricExecutor.shutdownNow();
         Dependency.get(DarkIconDispatcher.class).removeDarkReceiver(this);
     }
@@ -241,6 +248,7 @@ public abstract class LyricViewController implements DarkIconDispatcher.DarkRece
             mCurrentTrackKey = null;
             mRetryTrackKey = null;
             mFetchRetryCount = 0;
+            mDebugLyrics = null;
             stopLyric();
         } else if (!wasEnabled) {
             refreshActiveSessions();
@@ -457,13 +465,26 @@ public abstract class LyricViewController implements DarkIconDispatcher.DarkRece
         final long fetchGeneration = mFetchGeneration;
         mPendingFetch = mLyricExecutor.submit(() -> {
             LyricSource.Lyrics lyrics = null;
-            for (LyricSource source : LyricSourceFactory.create(requestedSourceSetting)) {
+            List<LyricSource> sources = LyricSourceFactory.create(requestedSourceSetting);
+            for (LyricSource source : sources) {
                 if (Thread.currentThread().isInterrupted()) {
                     return;
                 }
-                lyrics = source.fetch(requestedTrack);
-                if (lyrics != null) {
+                LyricSource.Lyrics enhancedLyrics = source.fetchEnhanced(requestedTrack);
+                if (enhancedLyrics != null && enhancedLyrics.hasWordTiming()) {
+                    lyrics = enhancedLyrics;
                     break;
+                }
+            }
+            if (lyrics == null) {
+                for (LyricSource source : sources) {
+                    if (Thread.currentThread().isInterrupted()) {
+                        return;
+                    }
+                    lyrics = source.fetch(requestedTrack);
+                    if (lyrics != null) {
+                        break;
+                    }
                 }
             }
             final LyricSource.Lyrics fetchedLyrics = lyrics;
@@ -488,6 +509,20 @@ public abstract class LyricViewController implements DarkIconDispatcher.DarkRece
     }
 
     private void updateDisplayedLyric() {
+        if (mDebugLyrics != null) {
+            LyricSource.Cue cue = mDebugLyrics.getCueAt(
+                    SystemClock.elapsedRealtime() - mDebugStartElapsedRealtime);
+            if (cue == null) {
+                setTextForAllHolders("", null, null, 0);
+                return;
+            }
+            setTextForAllHolders(cue.text, cue.translatedText, cue.words,
+                    SystemClock.elapsedRealtime() - mDebugStartElapsedRealtime);
+            if (!mStarted) {
+                startLyric();
+            }
+            return;
+        }
         if (mCurrentLyrics == null || mCurrentMediaController == null) {
             return;
         }
@@ -497,13 +532,13 @@ public abstract class LyricViewController implements DarkIconDispatcher.DarkRece
         }
         LyricSource.Cue cue = mCurrentLyrics.getCueAt(getPlaybackPosition(state));
         if (cue == null) {
-            setTextForAllHolders("", null);
+            setTextForAllHolders("", null, null, 0);
             if (mStarted) {
                 stopLyric();
             }
             return;
         }
-        setTextForAllHolders(cue.text, cue.translatedText);
+        setTextForAllHolders(cue.text, cue.translatedText, cue.words, getPlaybackPosition(state));
         if (!mStarted) {
             startLyric();
         }
@@ -601,7 +636,7 @@ public abstract class LyricViewController implements DarkIconDispatcher.DarkRece
         }
         mCurrentLyricText = null;
         mCurrentTranslatedText = null;
-        setTextForAllHolders(null, null);
+        setTextForAllHolders(null, null, null, 0);
     }
 
     public abstract void showLyricView(boolean animate);
@@ -709,7 +744,8 @@ public abstract class LyricViewController implements DarkIconDispatcher.DarkRece
         updateIconVisibility();
     }
 
-    private void setTextForAllHolders(CharSequence text, CharSequence translatedText) {
+    private void setTextForAllHolders(CharSequence text, CharSequence translatedText,
+            List<LyricSource.Word> words, long positionMs) {
         boolean lyricChanged = !TextUtils.equals(mCurrentLyricText, text);
         boolean translationChanged = !TextUtils.equals(mCurrentTranslatedText, translatedText);
         mCurrentLyricText = text;
@@ -726,7 +762,53 @@ public abstract class LyricViewController implements DarkIconDispatcher.DarkRece
                 setSubtitle(mInlineLyricViewHolder, getVisibleTranslatedText());
             }
         }
+        setWordTimingForAllHolders(words, positionMs);
         postApplyTextTint();
+    }
+
+    private void setWordTimingForAllHolders(List<LyricSource.Word> words, long positionMs) {
+        setWordTiming(mOverlayLyricViewHolder, words, positionMs);
+        if (mInlineLyricViewHolder != null) {
+            setWordTiming(mInlineLyricViewHolder, words, positionMs);
+        }
+    }
+
+    private void setWordTiming(LyricViewHolder holder, List<LyricSource.Word> words,
+            long positionMs) {
+        setWordTiming(holder.mTextSwitcher.getCurrentView(), words, positionMs);
+        setWordTiming(holder.mTextSwitcher.getNextView(), words, positionMs);
+    }
+
+    private void setWordTiming(View view, List<LyricSource.Word> words, long positionMs) {
+        if (view instanceof LyricTextView) {
+            ((LyricTextView) view).setWordTiming(words, positionMs);
+        }
+    }
+
+    static boolean setDebugLyrics(LyricSource.Lyrics lyrics) {
+        LyricViewController controller = sDebugController;
+        if (controller == null) {
+            return false;
+        }
+        controller.mHandler.post(() -> controller.applyDebugLyrics(lyrics));
+        return true;
+    }
+
+    private void applyDebugLyrics(LyricSource.Lyrics lyrics) {
+        mDebugLyrics = lyrics;
+        if (lyrics == null) {
+            mHandler.removeCallbacks(mPositionUpdateRunnable);
+            stopLyric();
+            if (mEnabled) {
+                mCurrentTrackKey = null;
+                updateCurrentSession();
+            }
+            return;
+        }
+        mDebugStartElapsedRealtime = SystemClock.elapsedRealtime();
+        mHandler.removeCallbacks(mPositionUpdateRunnable);
+        updateDisplayedLyric();
+        mHandler.post(mPositionUpdateRunnable);
     }
 
     private CharSequence getVisibleTranslatedText() {

@@ -20,6 +20,10 @@ package org.uwuaosp.systemui.lyric;
 interface LyricSource {
     Lyrics fetch(Track track);
 
+    default Lyrics fetchEnhanced(Track track) {
+        return null;
+    }
+
     final class Track {
         final String packageName;
         final String mediaId;
@@ -56,17 +60,48 @@ interface LyricSource {
             java.util.Map.Entry<Long, Cue> entry = mCues.floorEntry(Math.max(0, positionMs));
             return entry == null ? null : entry.getValue();
         }
+
+        boolean hasWordTiming() {
+            for (Cue cue : mCues.values()) {
+                if (cue.hasWordTiming()) {
+                    return true;
+                }
+            }
+            return false;
+        }
     }
 
     final class Cue {
         final long timestampMs;
         final String text;
         final String translatedText;
+        final java.util.List<Word> words;
 
         Cue(long timestampMs, String text, String translatedText) {
+            this(timestampMs, text, translatedText, null);
+        }
+
+        Cue(long timestampMs, String text, String translatedText, java.util.List<Word> words) {
             this.timestampMs = timestampMs;
             this.text = text;
             this.translatedText = translatedText;
+            this.words = words;
+        }
+
+        boolean hasWordTiming() {
+            return words != null && !words.isEmpty();
+        }
+    }
+
+    final class Word {
+        final long beginMs;
+        final long endMs;
+        final String text;
+
+        Word(long beginMs, long endMs, String text) {
+            this.beginMs = beginMs;
+            this.endMs = Math.max(beginMs, endMs);
+            this.text = text;
         }
     }
 }

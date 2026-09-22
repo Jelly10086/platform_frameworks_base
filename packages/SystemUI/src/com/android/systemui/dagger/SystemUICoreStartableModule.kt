@@ -65,6 +65,7 @@ import dagger.Module
 import dagger.multibindings.ClassKey
 import dagger.multibindings.IntoMap
 import org.uwuaosp.systemui.music.MusicSuggestionStartable
+import org.uwuaosp.systemui.lyric.LyricDebugStartable
 import org.uwuaosp.systemui.sms.SmsCodeSuggestionStartable
 import org.uwuaosp.systemui.torch.TorchSuggestionStartable
 
@@ -110,6 +111,12 @@ abstract class SystemUICoreStartableModule {
     @IntoMap
     @ClassKey(MusicSuggestionStartable::class)
     abstract fun bindMusicSuggestionStartable(startable: MusicSuggestionStartable): CoreStartable
+
+    /** Inject into the manual status bar lyric debug command. */
+    @Binds
+    @IntoMap
+    @ClassKey(LyricDebugStartable::class)
+    abstract fun bindLyricDebugStartable(startable: LyricDebugStartable): CoreStartable
 
     /** Inject into GlobalActionsComponent. */
     @Binds

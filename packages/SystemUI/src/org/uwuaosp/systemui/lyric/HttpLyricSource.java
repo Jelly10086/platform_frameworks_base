@@ -36,11 +36,20 @@ final class HttpLyricSource implements LyricSource {
 
     @Override
     public Lyrics fetch(Track track) {
+        return fetch(track, "/v1/lyrics");
+    }
+
+    @Override
+    public Lyrics fetchEnhanced(Track track) {
+        return fetch(track, "/v2/lyrics");
+    }
+
+    private Lyrics fetch(Track track, String endpoint) {
         try {
             if (track == null) {
                 return null;
             }
-            String lyricUrl = mBaseUrl + "/v1/lyrics?title=" + encode(track.title)
+            String lyricUrl = mBaseUrl + endpoint + "?title=" + encode(track.title)
                     + "&artist=" + encode(track.artist)
                     + "&album=" + encode(track.album)
                     + "&durationMs=" + track.durationMs
@@ -55,17 +64,33 @@ final class HttpLyricSource implements LyricSource {
     }
 
     private JSONObject normalizeLyricResponse(JSONObject response) throws JSONException {
-        if (response.optJSONObject("lrc") != null || response.optJSONObject("tlyric") != null) {
-            return response;
-        }
         JSONObject normalized = new JSONObject();
-        String original = response.optString("lrc", response.optString("lyric",
-                response.optString("original", "")));
-        String translated = response.optString("tlyric", response.optString("translation",
-                response.optString("translated", "")));
-        normalized.put("lrc", new JSONObject().put("lyric", original));
-        normalized.put("tlyric", new JSONObject().put("lyric", translated));
+        normalized.put("lrc", new JSONObject().put("lyric", firstNonEmpty(
+                lyricValue(response, "lrc"), lyricValue(response, "lyric"),
+                lyricValue(response, "original"))));
+        normalized.put("tlyric", new JSONObject().put("lyric", firstNonEmpty(
+                lyricValue(response, "ytlrc"), lyricValue(response, "tlyric"),
+                lyricValue(response, "translation"), lyricValue(response, "translated"))));
+        normalized.put("yrc", new JSONObject().put("lyric", lyricValue(response, "yrc")));
+        normalized.put("ytlrc", new JSONObject().put("lyric", lyricValue(response, "ytlrc")));
         return normalized;
+    }
+
+    private String lyricValue(JSONObject response, String key) {
+        Object value = response.opt(key);
+        if (value instanceof JSONObject) {
+            return ((JSONObject) value).optString("lyric", "");
+        }
+        return value instanceof String ? (String) value : "";
+    }
+
+    private String firstNonEmpty(String... values) {
+        for (String value : values) {
+            if (value != null && !value.isEmpty()) {
+                return value;
+            }
+        }
+        return "";
     }
 
     private String encode(String value) throws IOException {

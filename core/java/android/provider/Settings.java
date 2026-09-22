@@ -14736,8 +14736,9 @@ public final class Settings {
         /**
          * Semicolon-separated HTTPS base URLs for custom lyric sources. Each source must provide
          * GET /v1/lyrics?title=&artist=&album=&durationMs=&sourcePackage=&mediaId= and return
-         * the standard lyric payload. An empty value uses the default remote source followed by
-         * the built-in lyric provider fallback.
+         * the standard lyric payload. GET /v2/lyrics with the same parameters is optional and may
+         * return YRC word timing. An empty value uses the default remote source followed by the
+         * built-in lyric provider fallback.
          *
          * @hide
          */

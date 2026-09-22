@@ -55,6 +55,9 @@ final class NetEaseLyricProvider implements LyricSource {
     private static final Pattern TIMESTAMP_PATTERN = Pattern.compile(
             "\\[(\\d{1,3}):(\\d{1,2})(?:\\.(\\d{1,3}))?\\]");
     private static final Pattern OFFSET_PATTERN = Pattern.compile("\\[offset:([+-]?\\d+)\\]");
+    private static final Pattern YRC_LINE_PATTERN = Pattern.compile("\\[(\\d+),(\\d+)\\](.*)");
+    private static final Pattern YRC_WORD_PATTERN = Pattern.compile(
+            "\\((\\d+),(\\d+),\\d+\\)([^\\(]*)");
 
     NetEaseLyricProvider() {
     }
@@ -250,15 +253,30 @@ final class NetEaseLyricProvider implements LyricSource {
     static LyricSource.Lyrics parseLyrics(JSONObject response) {
         JSONObject lrc = response.optJSONObject("lrc");
         JSONObject translatedLrc = response.optJSONObject("tlyric");
+        JSONObject enhancedTranslatedLrc = response.optJSONObject("ytlrc");
+        JSONObject enhancedLrc = response.optJSONObject("yrc");
         String original = lrc == null ? null : lrc.optString("lyric", null);
         String translated = translatedLrc == null ? null : translatedLrc.optString("lyric", null);
-        if (TextUtils.isEmpty(original) && TextUtils.isEmpty(translated)) {
+        String enhancedTranslated = enhancedTranslatedLrc == null
+                ? null : enhancedTranslatedLrc.optString("lyric", null);
+        String enhanced = enhancedLrc == null ? null : enhancedLrc.optString("lyric", null);
+        if (TextUtils.isEmpty(original) && TextUtils.isEmpty(translated)
+                && TextUtils.isEmpty(enhanced)) {
             return null;
         }
 
         TreeMap<Long, String> originalLines = parseLrc(original, getOffsetMs(original));
-        TreeMap<Long, String> translatedLines = parseLrc(translated, getOffsetMs(translated));
+        TreeMap<Long, String> translatedLines = parseTranslatedLines(
+                enhancedTranslated, translated);
+        TreeMap<Long, YrcLine> yrcLines = parseYrc(enhanced);
         TreeMap<Long, LyricSource.Cue> cues = new TreeMap<>();
+        if (!yrcLines.isEmpty()) {
+            for (YrcLine line : yrcLines.values()) {
+                cues.put(line.beginMs, new LyricSource.Cue(line.beginMs, line.text,
+                        findClosestLine(translatedLines, line.beginMs), line.words));
+            }
+            return cues.isEmpty() ? null : new LyricSource.Lyrics(cues);
+        }
         if (originalLines.isEmpty()) {
             for (Map.Entry<Long, String> entry : translatedLines.entrySet()) {
                 cues.put(entry.getKey(), new LyricSource.Cue(
@@ -271,6 +289,79 @@ final class NetEaseLyricProvider implements LyricSource {
                     findClosestLine(translatedLines, entry.getKey())));
         }
         return cues.isEmpty() ? null : new LyricSource.Lyrics(cues);
+    }
+
+    private static TreeMap<Long, String> parseTranslatedLines(String enhancedTranslated,
+            String translated) {
+        if (!TextUtils.isEmpty(enhancedTranslated)) {
+            TreeMap<Long, YrcLine> enhancedLines = parseYrc(enhancedTranslated);
+            if (!enhancedLines.isEmpty()) {
+                TreeMap<Long, String> lines = new TreeMap<>();
+                for (YrcLine line : enhancedLines.values()) {
+                    lines.put(line.beginMs, line.text);
+                }
+                return lines;
+            }
+            TreeMap<Long, String> enhancedLrc = parseLrc(enhancedTranslated,
+                    getOffsetMs(enhancedTranslated));
+            if (!enhancedLrc.isEmpty()) {
+                return enhancedLrc;
+            }
+        }
+        return parseLrc(translated, getOffsetMs(translated));
+    }
+
+    private static TreeMap<Long, YrcLine> parseYrc(String lyric) {
+        TreeMap<Long, YrcLine> lines = new TreeMap<>();
+        if (TextUtils.isEmpty(lyric)) {
+            return lines;
+        }
+        for (String rawLine : lyric.split("\\r?\\n")) {
+            String lineText = rawLine.trim();
+            if (lineText.isEmpty() || lineText.startsWith("{")) {
+                continue;
+            }
+            Matcher lineMatcher = YRC_LINE_PATTERN.matcher(lineText);
+            if (!lineMatcher.find()) {
+                continue;
+            }
+            long beginMs;
+            long durationMs;
+            try {
+                beginMs = Long.parseLong(lineMatcher.group(1));
+                durationMs = Long.parseLong(lineMatcher.group(2));
+            } catch (NumberFormatException e) {
+                continue;
+            }
+            Matcher wordMatcher = YRC_WORD_PATTERN.matcher(lineMatcher.group(3));
+            ArrayList<LyricSource.Word> words = new ArrayList<>();
+            StringBuilder text = new StringBuilder();
+            while (wordMatcher.find()) {
+                String wordText = wordMatcher.group(3);
+                if (TextUtils.isEmpty(wordText)) {
+                    continue;
+                }
+                try {
+                    long wordBeginMs = Long.parseLong(wordMatcher.group(1));
+                    long wordDurationMs = Long.parseLong(wordMatcher.group(2));
+                    words.add(new LyricSource.Word(wordBeginMs,
+                            wordBeginMs + wordDurationMs, wordText));
+                    text.append(wordText);
+                } catch (NumberFormatException e) {
+                    words.clear();
+                    break;
+                }
+            }
+            if (!words.isEmpty() && !TextUtils.isEmpty(text)) {
+                words.sort((first, second) -> Long.compare(first.beginMs, second.beginMs));
+                StringBuilder sortedText = new StringBuilder();
+                for (LyricSource.Word word : words) {
+                    sortedText.append(word.text);
+                }
+                lines.put(beginMs, new YrcLine(beginMs, durationMs, sortedText.toString(), words));
+            }
+        }
+        return lines;
     }
 
     private static String findClosestLine(TreeMap<Long, String> lines, long timestampMs) {
@@ -362,6 +453,20 @@ final class NetEaseLyricProvider implements LyricSource {
             return "";
         }
         return text;
+    }
+
+    private static final class YrcLine {
+        final long beginMs;
+        final long durationMs;
+        final String text;
+        final List<LyricSource.Word> words;
+
+        YrcLine(long beginMs, long durationMs, String text, List<LyricSource.Word> words) {
+            this.beginMs = beginMs;
+            this.durationMs = durationMs;
+            this.text = text;
+            this.words = words;
+        }
     }
 
     static String request(String endpoint) throws IOException {
