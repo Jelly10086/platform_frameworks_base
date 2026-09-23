@@ -13,6 +13,8 @@ import android.content.pm.ShortcutInfo
 import android.graphics.Outline
 import android.graphics.drawable.Drawable
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.os.UserHandle
 import android.provider.Settings
@@ -36,6 +38,8 @@ constructor(
 ) {
     private val launcherApps = context.getSystemService(LauncherApps::class.java)
     private val windowManager = context.getSystemService(WindowManager::class.java)
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val maxLifetimeRunnable = Runnable { hide() }
     private var overlayView: MomentArcView? = null
     private var lastWindowManagerErrorLogTime = Long.MIN_VALUE
     private var suppressedWindowManagerErrorCount = 0
@@ -89,6 +93,7 @@ constructor(
         try {
             windowManager.addView(view, MomentArcView.createLayoutParams())
             overlayView = view
+            mainHandler.postDelayed(maxLifetimeRunnable, MAX_LIFETIME_MS)
         } catch (e: Exception) {
             logWindowManagerFailure("Failed to add MomentArc view", e)
         }
@@ -103,6 +108,7 @@ constructor(
     }
 
     fun hide() {
+        mainHandler.removeCallbacks(maxLifetimeRunnable)
         val view = overlayView ?: return
         overlayView = null
         view.animateExit {
@@ -309,6 +315,7 @@ constructor(
     private companion object {
         const val TAG = "MomentArc"
         const val WINDOW_MANAGER_ERROR_LOG_INTERVAL_MS = 30_000L
+        const val MAX_LIFETIME_MS = 10_000L
         const val INNER_MAX_ICONS = 6
         const val OUTER_MAX_ICONS = 7
         const val ENTRY_SEPARATOR = "|"
