@@ -414,6 +414,7 @@ public class PhoneWindowManager implements WindowManagerPolicy {
     private static final float MOMENT_ARC_TRIGGER_DISTANCE_DP = 30f;
     private static final float MOMENT_ARC_TRIGGER_MAX_ANGLE_RAD =
             (float) Math.toRadians(80);
+    private static final long MOMENT_ARC_MAX_DURATION_MS = 10_000L;
     private static final String ACTION_SHOW_MOMENT_ARC =
             "com.android.systemui.action.SHOW_MOMENT_ARC";
     private static final String ACTION_UPDATE_MOMENT_ARC_TOUCH =
@@ -423,6 +424,7 @@ public class PhoneWindowManager implements WindowManagerPolicy {
     private final PointF mMomentArcGestureStart = new PointF();
     private boolean mTrackingMomentArcGesture;
     private boolean mMomentArcGestureTriggered;
+    private boolean mMomentArcGestureCancelPending;
     private volatile boolean mMomentEnabled;
     private volatile boolean mMomentArcGestureEnabled;
     private int mMomentArcDisplayWidth;
@@ -430,6 +432,22 @@ public class PhoneWindowManager implements WindowManagerPolicy {
     private float mMomentArcGestureHeightPx;
     private float mMomentArcGestureWidthPx;
     private float mMomentArcTriggerDistancePx;
+
+    private final Runnable mMomentArcTimeout = new Runnable() {
+        @Override
+        public void run() {
+            if (!mTrackingMomentArcGesture && !mMomentArcGestureTriggered) {
+                return;
+            }
+            if (mMomentArcGestureTriggered) {
+                updateMomentArcTouch(mMomentArcGestureStart.x, mMomentArcGestureStart.y,
+                        false, true);
+            }
+            mTrackingMomentArcGesture = false;
+            mMomentArcGestureTriggered = false;
+            mMomentArcGestureCancelPending = true;
+        }
+    };
 
     private static final String ACTION_TORCH_OFF =
             "com.android.server.policy.PhoneWindowManager.ACTION_TORCH_OFF";
@@ -6192,11 +6210,21 @@ public class PhoneWindowManager implements WindowManagerPolicy {
         if (event.getDisplayId() != Display.DEFAULT_DISPLAY) {
             return SYSTEM_GESTURE_NONE;
         }
-        if (!mMomentEnabled || !mMomentArcGestureEnabled) {
+        if (mMomentArcGestureCancelPending) {
+            mMomentArcGestureCancelPending = false;
+            return SYSTEM_GESTURE_CANCELED;
+        }
+        if (!mMomentEnabled || !mMomentArcGestureEnabled
+                || isKeyguardShowingAndNotOccluded()) {
             if (mTrackingMomentArcGesture || mMomentArcGestureTriggered) {
+                if (mMomentArcGestureTriggered) {
+                    updateMomentArcTouch(mMomentArcGestureStart.x, mMomentArcGestureStart.y,
+                            false, true);
+                }
+                mHandler.removeCallbacks(mMomentArcTimeout);
                 mTrackingMomentArcGesture = false;
                 mMomentArcGestureTriggered = false;
-                return SYSTEM_GESTURE_RESET;
+                return SYSTEM_GESTURE_CANCELED;
             }
             return SYSTEM_GESTURE_NONE;
         }
@@ -6208,6 +6236,10 @@ public class PhoneWindowManager implements WindowManagerPolicy {
             case MotionEvent.ACTION_DOWN:
                 if (mMomentArcGestureTriggered) {
                     updateMomentArcTouch(x, y, false, true);
+                    mHandler.removeCallbacks(mMomentArcTimeout);
+                    mMomentArcGestureTriggered = false;
+                    mTrackingMomentArcGesture = false;
+                    return SYSTEM_GESTURE_CANCELED;
                 }
                 mTrackingMomentArcGesture = false;
                 mMomentArcGestureTriggered = false;
@@ -6238,6 +6270,8 @@ public class PhoneWindowManager implements WindowManagerPolicy {
                                         mMomentArcGestureStart.y);
                                 mMomentArcGestureTriggered = true;
                                 mTrackingMomentArcGesture = false;
+                                mHandler.postDelayed(mMomentArcTimeout,
+                                        MOMENT_ARC_MAX_DURATION_MS);
                             } else {
                                 mTrackingMomentArcGesture = false;
                                 return SYSTEM_GESTURE_RESET;
@@ -6253,22 +6287,26 @@ public class PhoneWindowManager implements WindowManagerPolicy {
                 break;
             case MotionEvent.ACTION_UP:
                 if (mMomentArcGestureTriggered) {
+                    mHandler.removeCallbacks(mMomentArcTimeout);
                     updateMomentArcTouch(x, y, true, false);
                     mMomentArcGestureTriggered = false;
                     return SYSTEM_GESTURE_RESET;
                 }
                 if (mTrackingMomentArcGesture) {
+                    mHandler.removeCallbacks(mMomentArcTimeout);
                     mTrackingMomentArcGesture = false;
                     return SYSTEM_GESTURE_RESET;
                 }
                 break;
             case MotionEvent.ACTION_CANCEL:
                 if (mMomentArcGestureTriggered) {
+                    mHandler.removeCallbacks(mMomentArcTimeout);
                     updateMomentArcTouch(x, y, false, true);
                     mMomentArcGestureTriggered = false;
                     return SYSTEM_GESTURE_CANCELED;
                 }
                 if (mTrackingMomentArcGesture) {
+                    mHandler.removeCallbacks(mMomentArcTimeout);
                     mTrackingMomentArcGesture = false;
                     return SYSTEM_GESTURE_CANCELED;
                 }
@@ -6326,9 +6364,13 @@ public class PhoneWindowManager implements WindowManagerPolicy {
                 @Override
                 public void onDisplayChanged(int displayId) {
                     if (displayId == Display.DEFAULT_DISPLAY) {
-                        if (mMomentArcGestureTriggered) {
-                            updateMomentArcTouch(mMomentArcGestureStart.x,
-                                    mMomentArcGestureStart.y, false, true);
+                        if (mTrackingMomentArcGesture || mMomentArcGestureTriggered) {
+                            if (mMomentArcGestureTriggered) {
+                                updateMomentArcTouch(mMomentArcGestureStart.x,
+                                        mMomentArcGestureStart.y, false, true);
+                            }
+                            mHandler.removeCallbacks(mMomentArcTimeout);
+                            mMomentArcGestureCancelPending = true;
                         }
                         updateMomentArcGestureParams();
                         mTrackingMomentArcGesture = false;
