@@ -39,6 +39,7 @@ class MomentArcView(context: Context, private val isLeft: Boolean) : ViewGroup(c
     private var iconLaunchListener: ((Int) -> Unit)? = null
     private var dismissListener: (() -> Unit)? = null
     private val pendingTouchCoordinates = ArrayDeque<TouchCoordinates>()
+    private val runningAnimators = ArrayList<Animator>()
 
     init {
         setWillNotDraw(false)
@@ -154,17 +155,25 @@ class MomentArcView(context: Context, private val isLeft: Boolean) : ViewGroup(c
             animations.add(ObjectAnimator.ofFloat(child, "alpha", child.alpha, 0f))
         }
 
-        AnimatorSet().apply {
+        val exitAnimator = AnimatorSet().apply {
             playTogether(animations)
             duration = EXIT_ANIMATION_DURATION_MS
             interpolator = AccelerateInterpolator()
             addListener(object : AnimatorListenerAdapter() {
                 override fun onAnimationEnd(animation: Animator) {
-                    onEnd()
+                    if (isAttachedToWindow) onEnd()
                 }
             })
-            start()
         }
+        startAnimator(exitAnimator)
+    }
+
+    override fun onDetachedFromWindow() {
+        runningAnimators.toList().forEach(Animator::cancel)
+        runningAnimators.clear()
+        pendingTouchCoordinates.clear()
+        resetTouchState()
+        super.onDetachedFromWindow()
     }
 
     private fun processTouchCoordinates(
@@ -250,10 +259,10 @@ class MomentArcView(context: Context, private val isLeft: Boolean) : ViewGroup(c
     }
 
     private fun startIntroAnimation() {
-        ObjectAnimator.ofInt(background, "alpha", 0, 128).apply {
+        val backgroundAnimator = ObjectAnimator.ofInt(background, "alpha", 0, 128).apply {
             duration = ANIMATION_DURATION_MS
-            start()
         }
+        startAnimator(backgroundAnimator)
 
         val bounds = windowManager.currentWindowMetrics.bounds
         val screenWidth = bounds.width()
@@ -271,7 +280,7 @@ class MomentArcView(context: Context, private val isLeft: Boolean) : ViewGroup(c
             child.translationX = centerX - (child.left + child.width / 2f)
             child.translationY = centerY - (child.top + child.height / 2f)
             val delay = index * 15L + if (index >= INNER_CHILD_COUNT) 100L else 0L
-            AnimatorSet().apply {
+            val iconAnimator = AnimatorSet().apply {
                 playTogether(
                     ObjectAnimator.ofFloat(child, "translationX", child.translationX, 0f),
                     ObjectAnimator.ofFloat(child, "translationY", child.translationY, 0f),
@@ -281,9 +290,19 @@ class MomentArcView(context: Context, private val isLeft: Boolean) : ViewGroup(c
                 )
                 interpolator = DecelerateInterpolator(1.5f)
                 duration = ANIMATION_DURATION_MS + delay
-                start()
             }
+            startAnimator(iconAnimator)
         }
+    }
+
+    private fun startAnimator(animator: Animator) {
+        runningAnimators.add(animator)
+        animator.addListener(object : AnimatorListenerAdapter() {
+            override fun onAnimationEnd(animation: Animator) {
+                runningAnimators.remove(animation)
+            }
+        })
+        animator.start()
     }
 
     private fun resetTouchState() {
