@@ -1059,6 +1059,9 @@ public class PhoneWindowManager implements WindowManagerPolicy {
         @Override
         public void onShowingChanged() {
             mWindowManagerFuncs.onKeyguardShowingAndNotOccludedChanged();
+            if (isKeyguardShowingAndNotOccluded()) {
+                mHandler.post(PhoneWindowManager.this::cancelMomentArcGesture);
+            }
         }
 
         @Override
@@ -5691,6 +5694,8 @@ public class PhoneWindowManager implements WindowManagerPolicy {
             return;
         }
 
+        cancelMomentArcGesture();
+
         if (DEBUG_WAKEUP) {
             Slog.i(TAG, "Started going to sleep... (groupId=" + displayGroupId + " why="
                     + WindowManagerPolicyConstants.offReasonToString(
@@ -6198,6 +6203,20 @@ public class PhoneWindowManager implements WindowManagerPolicy {
             mKeyguardBound = true;
         }
         mKeyguardDelegate.bindService(mContext, mHandler);
+    }
+
+    private void cancelMomentArcGesture() {
+        if (!mTrackingMomentArcGesture && !mMomentArcGestureTriggered) {
+            return;
+        }
+        if (mMomentArcGestureTriggered) {
+            updateMomentArcTouch(mMomentArcGestureStart.x, mMomentArcGestureStart.y,
+                    false, true);
+        }
+        mHandler.removeCallbacks(mMomentArcTimeout);
+        mTrackingMomentArcGesture = false;
+        mMomentArcGestureTriggered = false;
+        mMomentArcGestureCancelPending = true;
     }
 
     @Override
