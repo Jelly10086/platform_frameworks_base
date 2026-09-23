@@ -160,6 +160,7 @@ public abstract class LyricViewController implements DarkIconDispatcher.DarkRece
     private boolean mStarted;
     private boolean mShowOnClockRight;
     private boolean mShowTranslation;
+    private volatile boolean mWordTimingEnabled = true;
     private boolean mHideIconOnClockRight;
     private boolean mTemporarilyHidden;
     private boolean mSessionListenerRegistered;
@@ -295,6 +296,18 @@ public abstract class LyricViewController implements DarkIconDispatcher.DarkRece
         setSubtitle(mOverlayLyricViewHolder, translatedText);
         if (mInlineLyricViewHolder != null) {
             setSubtitle(mInlineLyricViewHolder, translatedText);
+        }
+    }
+
+    public void setWordTimingEnabled(boolean wordTimingEnabled) {
+        if (mWordTimingEnabled == wordTimingEnabled) {
+            return;
+        }
+        mWordTimingEnabled = wordTimingEnabled;
+        if (mEnabled) {
+            cancelPendingFetch();
+            mCurrentTrackKey = null;
+            updateCurrentSession();
         }
     }
 
@@ -466,14 +479,16 @@ public abstract class LyricViewController implements DarkIconDispatcher.DarkRece
         mPendingFetch = mLyricExecutor.submit(() -> {
             LyricSource.Lyrics lyrics = null;
             List<LyricSource> sources = LyricSourceFactory.create(requestedSourceSetting);
-            for (LyricSource source : sources) {
-                if (Thread.currentThread().isInterrupted()) {
-                    return;
-                }
-                LyricSource.Lyrics enhancedLyrics = source.fetchEnhanced(requestedTrack);
-                if (enhancedLyrics != null && enhancedLyrics.hasWordTiming()) {
-                    lyrics = enhancedLyrics;
-                    break;
+            if (mWordTimingEnabled) {
+                for (LyricSource source : sources) {
+                    if (Thread.currentThread().isInterrupted()) {
+                        return;
+                    }
+                    LyricSource.Lyrics enhancedLyrics = source.fetchEnhanced(requestedTrack);
+                    if (enhancedLyrics != null && enhancedLyrics.hasWordTiming()) {
+                        lyrics = enhancedLyrics;
+                        break;
+                    }
                 }
             }
             if (lyrics == null) {

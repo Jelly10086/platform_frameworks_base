@@ -14721,6 +14721,19 @@ public final class Settings {
                 "status_bar_lyric_show_translation";
 
         /**
+         * Controls whether word-timed lyrics are requested when available.
+         * <ul>
+         *    <li> 0 = use line-timed lyrics only </li>
+         *    <li> 1 = prefer word-timed lyrics and fall back to line timing </li>
+         * </ul>
+         *
+         * @hide
+         */
+        @Readable
+        public static final String STATUS_BAR_LYRIC_WORD_TIMING =
+                "status_bar_lyric_word_timing";
+
+        /**
          * Controls whether the music app icon is hidden in clock-right lyric mode.
          * <ul>
          *    <li> 0 = show icon </li>

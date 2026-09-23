@@ -44,7 +44,7 @@ final class NetEaseLyricProvider implements LyricSource {
     private static final String TAG = "NetEaseLyricProvider";
     private static final String NETEASE_PACKAGE = "com.netease.cloudmusic";
     private static final String SEARCH_ENDPOINT =
-            "https://music.163.com/api/search/get/web?s=%s&type=1&offset=0&total=true&limit=10";
+            "https://music.163.com/api/search/get?s=%s&type=1&offset=0&total=true&limit=10";
     private static final String LYRIC_ENDPOINT =
             "https://music.163.com/api/song/lyric?os=pc&id=%d&lv=-1&tv=-1";
     private static final int CONNECT_TIMEOUT_MS = 5_000;

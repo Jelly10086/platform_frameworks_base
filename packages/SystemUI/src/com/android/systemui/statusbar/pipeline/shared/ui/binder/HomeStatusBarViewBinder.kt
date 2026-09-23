@@ -174,6 +174,11 @@ class HomeStatusBarViewBinderImpl @Inject constructor() : HomeStatusBarViewBinde
                         lyricController.setShowTranslation(it)
                     }
                 }
+                launch {
+                    viewModel.isLyricWordTimingEnabled.collect {
+                        lyricController.setWordTimingEnabled(it)
+                    }
+                }
                 launch { viewModel.isLyricVisible.collect { lyricController.adjustVisibility(it) } }
 
                 launch {
