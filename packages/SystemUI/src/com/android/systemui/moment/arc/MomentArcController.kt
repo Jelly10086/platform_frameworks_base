@@ -103,14 +103,15 @@ constructor(
     }
 
     fun hide() {
-        overlayView?.let { view ->
+        val view = overlayView ?: return
+        overlayView = null
+        view.animateExit {
             try {
                 windowManager.removeView(view)
             } catch (e: Exception) {
                 logWindowManagerFailure("Failed to remove MomentArc view", e)
             }
         }
-        overlayView = null
     }
 
     fun isMomentArcEnabled(): Boolean {

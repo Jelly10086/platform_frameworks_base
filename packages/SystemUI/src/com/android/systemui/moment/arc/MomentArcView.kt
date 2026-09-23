@@ -4,6 +4,8 @@
  */
 package com.android.systemui.moment.arc
 
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
 import android.animation.AnimatorSet
 import android.animation.ObjectAnimator
 import android.content.Context
@@ -17,6 +19,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.WindowInsets
 import android.view.WindowManager
+import android.view.animation.AccelerateInterpolator
 import android.view.animation.DecelerateInterpolator
 import kotlin.math.cos
 import kotlin.math.min
@@ -29,6 +32,7 @@ class MomentArcView(context: Context, private val isLeft: Boolean) : ViewGroup(c
     private var selectedChildIndex = -1
     private var lastVibratedIndex = -1
     private var isTouching = false
+    private var isExiting = false
     private var initialTouchX = -1f
     private var initialTouchY = -1f
     private var hasInitialTouchPoint = false
@@ -108,6 +112,7 @@ class MomentArcView(context: Context, private val isLeft: Boolean) : ViewGroup(c
     }
 
     fun dispatchTouchCoordinates(x: Float, y: Float, isUp: Boolean, isCancelled: Boolean) {
+        if (isExiting) return
         if (isCancelled) {
             pendingTouchCoordinates.clear()
             cancelTouch()
@@ -118,6 +123,48 @@ class MomentArcView(context: Context, private val isLeft: Boolean) : ViewGroup(c
             return
         }
         processTouchCoordinates(x, y, isUp, isCancelled)
+    }
+
+    fun animateExit(onEnd: () -> Unit) {
+        if (isExiting) return
+        isExiting = true
+
+        val bounds = windowManager.currentWindowMetrics.bounds
+        val screenWidth = bounds.width()
+        val screenHeight = bounds.height()
+        val navbarHeight = windowManager.currentWindowMetrics.windowInsets
+            .getInsets(WindowInsets.Type.navigationBars()).bottom
+        val centerX = screenWidth * if (isLeft) CIRCLE_X else 1f - CIRCLE_X
+        val centerY = screenHeight * CIRCLE_Y - navbarHeight
+        val animations = ArrayList<Animator>(childCount * 3 + 1)
+
+        background?.let { drawable ->
+            animations.add(ObjectAnimator.ofInt(drawable, "alpha", drawable.alpha, 0))
+        }
+        for (index in 0 until childCount) {
+            val child = getChildAt(index)
+            val targetTranslationX = centerX - (child.left + child.width / 2f)
+            val targetTranslationY = centerY - (child.top + child.height / 2f)
+            animations.add(ObjectAnimator.ofFloat(child, "translationX", child.translationX,
+                targetTranslationX))
+            animations.add(ObjectAnimator.ofFloat(child, "translationY", child.translationY,
+                targetTranslationY))
+            animations.add(ObjectAnimator.ofFloat(child, "scaleX", child.scaleX, 0.8f))
+            animations.add(ObjectAnimator.ofFloat(child, "scaleY", child.scaleY, 0.8f))
+            animations.add(ObjectAnimator.ofFloat(child, "alpha", child.alpha, 0f))
+        }
+
+        AnimatorSet().apply {
+            playTogether(animations)
+            duration = EXIT_ANIMATION_DURATION_MS
+            interpolator = AccelerateInterpolator()
+            addListener(object : AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: Animator) {
+                    onEnd()
+                }
+            })
+            start()
+        }
     }
 
     private fun processTouchCoordinates(
@@ -254,6 +301,7 @@ class MomentArcView(context: Context, private val isLeft: Boolean) : ViewGroup(c
 
     companion object {
         private const val ANIMATION_DURATION_MS = 180L
+        private const val EXIT_ANIMATION_DURATION_MS = 150L
         private const val CIRCLE_X = 0.1f
         private const val CIRCLE_Y = 0.95f
         private const val ICON_SIZE_RATIO = 0.1f
