@@ -207,14 +207,27 @@ class MomentArcView(context: Context, private val isLeft: Boolean) : ViewGroup(c
             duration = ANIMATION_DURATION_MS
             start()
         }
+
+        val bounds = windowManager.currentWindowMetrics.bounds
+        val screenWidth = bounds.width()
+        val screenHeight = bounds.height()
+        val navbarHeight = windowManager.currentWindowMetrics.windowInsets
+            .getInsets(WindowInsets.Type.navigationBars()).bottom
+        val centerX = screenWidth * if (isLeft) CIRCLE_X else 1f - CIRCLE_X
+        val centerY = screenHeight * CIRCLE_Y - navbarHeight
+
         for (index in 0 until childCount) {
             val child = getChildAt(index)
             child.alpha = 0f
             child.scaleX = 0.8f
             child.scaleY = 0.8f
+            child.translationX = centerX - (child.left + child.width / 2f)
+            child.translationY = centerY - (child.top + child.height / 2f)
             val delay = index * 15L + if (index >= INNER_CHILD_COUNT) 100L else 0L
             AnimatorSet().apply {
                 playTogether(
+                    ObjectAnimator.ofFloat(child, "translationX", child.translationX, 0f),
+                    ObjectAnimator.ofFloat(child, "translationY", child.translationY, 0f),
                     ObjectAnimator.ofFloat(child, "scaleX", 0.8f, 1f),
                     ObjectAnimator.ofFloat(child, "scaleY", 0.8f, 1f),
                     ObjectAnimator.ofFloat(child, "alpha", 0f, 1f),
