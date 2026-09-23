@@ -17,6 +17,7 @@ import com.android.systemui.CoreStartable
 import com.android.systemui.broadcast.BroadcastDispatcher
 import com.android.systemui.dagger.SysUISingleton
 import com.android.systemui.dagger.qualifiers.Main
+import com.android.systemui.keyguard.WakefulnessLifecycle
 import com.android.systemui.settings.UserTracker
 import java.util.concurrent.Executor
 import javax.inject.Inject
@@ -29,6 +30,7 @@ constructor(
     private val broadcastDispatcher: BroadcastDispatcher,
     private val controller: MomentArcController,
     private val userTracker: UserTracker,
+    private val wakefulnessLifecycle: WakefulnessLifecycle,
     @Main private val mainExecutor: Executor,
     @Main private val mainHandler: Handler,
 ) : CoreStartable {
@@ -73,6 +75,13 @@ constructor(
             override fun onUserChanged(newUser: Int, userContext: Context) = controller.hide()
         }
 
+    private val wakefulnessObserver =
+        object : WakefulnessLifecycle.Observer {
+            override fun onStartedGoingToSleep() {
+                controller.hide()
+            }
+        }
+
     override fun start() {
         broadcastDispatcher.registerReceiver(
             gestureReceiver,
@@ -94,6 +103,7 @@ constructor(
             Context.RECEIVER_NOT_EXPORTED,
         )
         userTracker.addCallback(userCallback, mainExecutor)
+        wakefulnessLifecycle.addObserver(wakefulnessObserver)
         listOf(Settings.Secure.MOMENT_ENABLED, Settings.Secure.MOMENT_ARC_GESTURE_ENABLED)
             .forEach { setting ->
                 context.contentResolver.registerContentObserver(
