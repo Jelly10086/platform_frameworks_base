@@ -53,21 +53,6 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
 private const val KEY_TIMESTAMP = "appliedTimestamp"
-private val KNOWN_PLUGINS: Map<String, List<ClockMetadata>> =
-    mapOf(
-        "com.android.systemui.clocks.bignum" to listOf(ClockMetadata("ANALOG_CLOCK_BIGNUM")),
-        "com.android.systemui.clocks.calligraphy" to
-            listOf(ClockMetadata("DIGITAL_CLOCK_CALLIGRAPHY")),
-        "com.android.systemui.clocks.flex" to listOf(ClockMetadata("DIGITAL_CLOCK_FLEX")),
-        "com.android.systemui.clocks.growth" to listOf(ClockMetadata("DIGITAL_CLOCK_GROWTH")),
-        "com.android.systemui.clocks.handwritten" to
-            listOf(ClockMetadata("DIGITAL_CLOCK_HANDWRITTEN")),
-        "com.android.systemui.clocks.inflate" to listOf(ClockMetadata("DIGITAL_CLOCK_INFLATE")),
-        "com.android.systemui.clocks.metro" to listOf(ClockMetadata("DIGITAL_CLOCK_METRO")),
-        "com.android.systemui.clocks.numoverlap" to
-            listOf(ClockMetadata("DIGITAL_CLOCK_NUMBEROVERLAP")),
-        "com.android.systemui.clocks.weather" to listOf(ClockMetadata("DIGITAL_CLOCK_WEATHER")),
-    )
 private const val TRACE_CLOCK_CHANGE = "LOCKSCREEN_CLOCK_CHANGE"
 private const val TRACE_STYLE_CHANGE = "LOCKSCREEN_CLOCK_STYLE_CHANGE"
 
@@ -132,59 +117,11 @@ open class ClockRegistry(
             override fun onPluginAttached(
                 manager: PluginLifecycleManager<ClockProviderPlugin>
             ): Boolean {
-                if (keepAllLoaded) {
-                    // Always load new plugins if requested
-                    logger.d({ "Loading clock package: $str1" }) { str1 = manager.packageName }
-                    return true
-                }
-
-                val knownClocks = KNOWN_PLUGINS[manager.packageName]
-                if (knownClocks == null) {
-                    logger.w({ "Loading unrecognized clock package: $str1" }) {
-                        str1 = manager.packageName
-                    }
-                    return true
-                }
-
-                logger.i({ "Skipping initial load of known clock package: $str1" }) {
-                    str1 = manager.packageName
-                }
-
-                var isCurrentClock = false
-                var isClockListChanged = false
-                for (metadata in knownClocks) {
-                    val id = metadata.clockId
-                    val info =
-                        availableClocks.concurrentGetOrPut(id, ClockInfo(metadata, null, manager)) {
-                            isClockListChanged = true
-                            onConnected(it)
-                        }
-
-                    if (manager != info.manager) {
-                        logger.e({
-                            "Clock Id conflict on attach: " +
-                                "$str1 is double registered by $str2 and $str3. " +
-                                "Using $str2 since it was attached first."
-                        }) {
-                            str1 = id
-                            str2 = info.manager?.toString() ?: info.provider?.toString()
-                            str3 = manager.toString()
-                        }
-                        continue
-                    }
-
-                    isCurrentClock = isCurrentClock || currentClockId == metadata.clockId
-                    info.provider = null
-                }
-
-                if (isClockListChanged) {
-                    triggerOnAvailableClocksChanged()
-                }
-                verifyLoadedProviders()
-
-                // Load immediately if it's the current clock, otherwise let verifyLoadedProviders
-                // load and unload clocks as necessary on the background thread.
-                return isCurrentClock
+                // Clock IDs are provider-owned and are only available after the provider has been
+                // instantiated. Do not maintain a package-name registry here; it prevents new
+                // system clock providers from being discovered without a SystemUI change.
+                logger.i({ "Loading clock provider: $str1" }) { str1 = manager.packageName }
+                return true
             }
 
             override fun onPluginLoaded(

@@ -32,6 +32,7 @@ import com.android.systemui.log.core.Logger
 import com.android.systemui.plugins.Plugin
 import com.android.systemui.plugins.PluginListener
 import com.android.systemui.plugins.PluginManager
+import com.android.systemui.plugins.keyguard.ui.clocks.ClockProviderPlugin
 import com.android.systemui.shared.plugins.PluginEnabler.DisableReason
 import com.android.systemui.shared.plugins.PluginManagerImpl.Companion.DEFAULT_LOGBUFFER
 import com.android.systemui.shared.plugins.VersionInfo.InvalidVersionException
@@ -226,8 +227,10 @@ private constructor(
     }
 
     private fun loadPluginComponent(component: ComponentName): PluginInstance<T>? {
-        // Do not load non-privileged plugins in production builds.
-        if (!env.isDebuggable && !packages.isPrivileged(component)) {
+        // Clock providers are discovered by their plugin action instead of a package-name
+        // allowlist. They are still required to declare the SystemUI plugin permission below.
+        val isClockProvider = action == ClockProviderPlugin.ACTION
+        if (!env.isDebuggable && !packages.isPrivileged(component) && !isClockProvider) {
             logger.e({ "Plugin cannot be loaded in production: $str1" }) { str1 = "$component" }
             return null
         }

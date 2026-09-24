@@ -32,6 +32,7 @@ import com.android.systemui.SysuiTestableContext
 import com.android.systemui.plugins.Plugin
 import com.android.systemui.plugins.PluginListener
 import com.android.systemui.plugins.annotations.Requires
+import com.android.systemui.plugins.keyguard.ui.clocks.ClockProviderPlugin
 import com.android.systemui.shared.plugins.PluginEnabler.DisableReason
 import com.android.systemui.util.concurrency.FakeExecutor
 import com.android.systemui.util.time.FakeSystemClock
@@ -216,6 +217,38 @@ class PluginActionManagerTest : SysuiTestCase() {
         mFakeExecutor.runAllReady()
 
         // Verify startup lifecycle
+        verify(mPluginInstance).onCreate()
+    }
+
+    @Test
+    @Throws(Exception::class)
+    fun testNonDebuggable_clockProviderDoesNotRequirePackageAllowlist() {
+        val factory =
+            PluginActionManager.Factory(
+                context,
+                mMockPm,
+                mFakeExecutor,
+                mFakeExecutor,
+                mNotificationManager,
+                mMockEnabler,
+                PackageConfig(),
+                mPluginInstanceFactory,
+                mMockPluginPrefs,
+                PluginEnvironment(BuildVariant.User, isDebuggable = false),
+            )
+        mPluginActionManager =
+            factory.create(
+                ClockProviderPlugin.ACTION,
+                mMockListener,
+                TestPlugin::class.java,
+                allowMultiple = true,
+            )
+        setupFakePmQuery()
+
+        mPluginActionManager.loadAll()
+
+        mFakeExecutor.runAllReady()
+
         verify(mPluginInstance).onCreate()
     }
 

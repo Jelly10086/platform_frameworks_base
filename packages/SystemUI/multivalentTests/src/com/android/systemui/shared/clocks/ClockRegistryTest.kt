@@ -413,7 +413,7 @@ class ClockRegistryTest : SysuiTestCase() {
     }
 
     @Test
-    fun knownPluginAttached_clockAndListChanged_loadedCurrent() {
+    fun pluginAttached_doesNotRequirePackageMetadata() {
         val metroLifecycle =
             FakeLifecycle(ComponentName("com.android.systemui.clocks.metro", "Metro"))
         val bignumLifecycle =
@@ -440,21 +440,21 @@ class ClockRegistryTest : SysuiTestCase() {
         assertEquals(1, changeCallCount)
         assertEquals(0, listChangeCallCount)
 
-        assertEquals(false, pluginListener.onPluginAttached(metroLifecycle))
+        assertEquals(true, pluginListener.onPluginAttached(metroLifecycle))
         scheduler.runCurrent()
         assertEquals(1, changeCallCount)
-        assertEquals(1, listChangeCallCount)
+        assertEquals(0, listChangeCallCount)
 
-        assertEquals(false, pluginListener.onPluginAttached(bignumLifecycle))
+        assertEquals(true, pluginListener.onPluginAttached(bignumLifecycle))
         scheduler.runCurrent()
         assertEquals(1, changeCallCount)
-        assertEquals(2, listChangeCallCount)
+        assertEquals(0, listChangeCallCount)
 
-        // This returns true, but doesn't trigger onCurrentClockChanged yet
+        // Every provider is loaded so its provider-owned clock IDs can be discovered.
         assertEquals(true, pluginListener.onPluginAttached(calligraphyLifecycle))
         scheduler.runCurrent()
         assertEquals(1, changeCallCount)
-        assertEquals(3, listChangeCallCount)
+        assertEquals(0, listChangeCallCount)
     }
 
     @Test
