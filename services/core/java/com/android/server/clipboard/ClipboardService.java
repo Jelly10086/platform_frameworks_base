@@ -172,7 +172,7 @@ public class ClipboardService extends SystemService {
     };
     private static final long ACCESS_NOTIFICATION_SUPPRESSION_TIMEOUT_MILLIS = 1000L;
     private static final long CLIPBOARD_ACCESS_PROMPT_THROTTLE_MILLIS = 30_000L;
-    private static final long TEMPORARY_CLIPBOARD_ACCESS_DURATION_MILLIS = 10_000L;
+    private static final long TEMPORARY_CLIPBOARD_ACCESS_DURATION_MILLIS = 30_000L;
 
     private final ActivityManagerInternal mAmInternal;
     private final IUriGrantsManager mUgm;
