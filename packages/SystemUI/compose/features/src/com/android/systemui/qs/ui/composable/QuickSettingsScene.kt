@@ -26,7 +26,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
-import androidx.compose.foundation.layout.displayCutoutPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -73,8 +72,6 @@ import com.android.compose.lifecycle.LaunchedEffectWithLifecycle
 import com.android.compose.modifiers.thenIf
 import com.android.compose.windowsizeclass.LocalWindowSizeClass
 import com.android.internal.jank.InteractionJankMonitor
-import com.android.systemui.common.ui.compose.windowinsets.CutoutLocation
-import com.android.systemui.common.ui.compose.windowinsets.LocalDisplayCutout
 import com.android.systemui.compose.modifiers.sysuiResTag
 import com.android.systemui.dagger.SysUISingleton
 import com.android.systemui.lifecycle.ExclusiveActivatable
@@ -359,18 +356,12 @@ private fun ContentScope.QuickSettingsContent(
     headerViewModel: ShadeHeaderViewModel,
     verticalOverscrollEffect: OverscrollEffect,
 ) {
-    val cutoutLocation = LocalDisplayCutout.current().location
 
     val shadeHorizontalPadding =
         dimensionResource(id = R.dimen.notification_panel_margin_horizontal)
 
     // TODO(b/280887232): implement the real UI.
-    Box(
-        modifier =
-            modifier.fillMaxSize().thenIf(cutoutLocation != CutoutLocation.CENTER) {
-                Modifier.displayCutoutPadding()
-            }
-    ) {
+    Box(modifier = modifier.fillMaxSize()) {
         val lifecycleOwner = LocalLifecycleOwner.current
         val footerActionsViewModel =
             remember(lifecycleOwner, viewModel) {

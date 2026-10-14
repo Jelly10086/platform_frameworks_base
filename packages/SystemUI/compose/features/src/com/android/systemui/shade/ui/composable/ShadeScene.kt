@@ -27,7 +27,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
-import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -92,8 +91,6 @@ import com.android.compose.modifiers.thenIf
 import com.android.internal.jank.InteractionJankMonitor
 import com.android.systemui.brightness.ui.compose.BrightnessSliderContainer
 import com.android.systemui.brightness.ui.compose.ContainerColors
-import com.android.systemui.common.ui.compose.windowinsets.CutoutLocation
-import com.android.systemui.common.ui.compose.windowinsets.LocalDisplayCutout
 import com.android.systemui.compose.modifiers.sysuiResTag
 import com.android.systemui.dagger.SysUISingleton
 import com.android.systemui.lifecycle.ExclusiveActivatable
@@ -295,10 +292,6 @@ private fun ContentScope.SingleShade(
     shadeSession: SaveableSession,
     onEmptySpaceClick: (() -> Unit)?,
 ) {
-
-    val cutoutLocation = LocalDisplayCutout.current().location
-
-    val cutoutInsets = WindowInsets.Companion.displayCutout
 
     val tileSquishiness by
         animateContentFloatAsState(
@@ -508,11 +501,7 @@ private fun ContentScope.SingleShade(
                 )
             },
             cutoutInsetsProvider = {
-                if (cutoutLocation == CutoutLocation.CENTER) {
-                    null
-                } else {
-                    cutoutInsets
-                }
+                null
             },
         )
         Box(
