@@ -133,10 +133,10 @@ class DeviceSettingServiceConnection(
                 .catch { e ->
                     if (e is DeadObjectException) {
                         Log.e(TAG, "DeadObjectException happens when try to get service status.", e)
-                        emit(false)
                     } else {
-                        throw e
+                        Log.w(TAG, "Fail to get service status", e)
                     }
+                    emit(false)
                 }
                 .firstOrNull() ?: false
         }
@@ -216,6 +216,11 @@ class DeviceSettingServiceConnection(
             )
         } catch (e: RemoteException) {
             Log.i(TAG, "Fail to get config", e)
+            continuation.resume(null)
+        } catch (e: RuntimeException) {
+            // Binder rethrows provider-side runtime exceptions here. Escaping would fail the
+            // config Deferred and cancel the caller-supplied scope.
+            Log.w(TAG, "Provider rejected config request", e)
             continuation.resume(null)
         }
     }
@@ -392,10 +397,10 @@ class DeviceSettingServiceConnection(
                 .catch { e ->
                     if (e is DeadObjectException) {
                         Log.e(TAG, "DeadObjectException happens when registering listener.", e)
-                        emit(listOf())
                     } else {
-                        throw e
+                        Log.w(TAG, "Fail to register device settings listener", e)
                     }
+                    emit(listOf())
                 }
                 .shareIn(
                     coroutineScope,
