@@ -2,6 +2,7 @@ package com.android.systemui.scene.ui.composable
 
 import android.content.res.Resources
 import com.android.compose.animation.scene.DefaultInterruptionHandler
+import com.android.compose.animation.scene.Edge
 import com.android.compose.animation.scene.SceneTransitions
 import com.android.compose.animation.scene.TransitionKey
 import com.android.compose.animation.scene.reveal.ContainerRevealHaptics
@@ -20,6 +21,7 @@ import com.android.systemui.scene.shared.model.TransitionKeys.SystemCommunalTran
 import com.android.systemui.scene.shared.model.TransitionKeys.ToAlwaysOnDisplay
 import com.android.systemui.scene.shared.model.TransitionKeys.ToSplitShade
 import com.android.systemui.scene.ui.composable.transitions.aodToGoneTransition
+import com.android.systemui.scene.ui.composable.transitions.betweenShadePanelsTransition
 import com.android.systemui.scene.ui.composable.transitions.bouncerToGoneTransition
 import com.android.systemui.scene.ui.composable.transitions.bouncerToLockscreenTransition
 import com.android.systemui.scene.ui.composable.transitions.communalToGoneTransition
@@ -61,6 +63,7 @@ import com.android.systemui.scene.ui.composable.transitions.toNotificationsShade
 import com.android.systemui.scene.ui.composable.transitions.toQuickActionsTransition
 import com.android.systemui.scene.ui.composable.transitions.toQuickSettingsShadeTransition
 import com.android.systemui.scene.ui.viewmodel.ToBouncerTransitionViewModel
+import com.android.systemui.shade.ui.composable.OverlayShade
 import com.android.systemui.shade.ui.composable.Shade
 
 /**
@@ -407,6 +410,38 @@ class SceneContainerTransitions : SceneContainerTransitionsBuilder {
             }
 
             // Overlay transitions
+
+            from(Overlays.NotificationsShade, to = Overlays.QuickSettingsShade) {
+                betweenShadePanelsTransition()
+            }
+
+            // Each physical direction has an explicit transition from either panel. Reversing
+            // one definition would animate a repeated same-direction swipe the wrong way.
+            val shadePairs =
+                listOf(
+                    Overlays.NotificationsShade to Overlays.QuickSettingsShade,
+                    Overlays.QuickSettingsShade to Overlays.NotificationsShade,
+                )
+            for ((source, target) in shadePairs) {
+                val fromPanel =
+                    if (source == Overlays.NotificationsShade) {
+                        OverlayShade.Elements.NotificationsSlidingContent
+                    } else {
+                        OverlayShade.Elements.QuickSettingsSlidingContent
+                    }
+                val toPanel =
+                    if (target == Overlays.NotificationsShade) {
+                        OverlayShade.Elements.NotificationsSlidingContent
+                    } else {
+                        OverlayShade.Elements.QuickSettingsSlidingContent
+                    }
+                from(source, to = target, key = TransitionKeys.ShadeSwipeLeft) {
+                    betweenShadePanelsTransition(fromPanel, toPanel, Edge.Left, Edge.Right)
+                }
+                from(source, to = target, key = TransitionKeys.ShadeSwipeRight) {
+                    betweenShadePanelsTransition(fromPanel, toPanel, Edge.Right, Edge.Left)
+                }
+            }
 
             to(Overlays.QuickActions) { toQuickActionsTransition() }
 

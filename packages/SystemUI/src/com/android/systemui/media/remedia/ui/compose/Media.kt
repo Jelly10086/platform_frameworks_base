@@ -96,6 +96,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -187,12 +188,19 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlinx.coroutines.launch
 
+private val LocalMediaHeaderGestureModifier =
+    staticCompositionLocalOf<@Composable () -> Modifier> { { Modifier } }
+
 /**
  * Renders a media controls UI element.
  *
  * This composable supports a multitude of presentation styles/layouts controlled by the
  * [presentationStyle] parameter. If the card carousel can be swiped away to dismiss by the user,
  * the [onDismissed] callback will be invoked when/if that happens.
+ *
+ * [headerGestureModifier] customizes gesture handling only over metadata/header regions. It is
+ * never applied to the seek bar, so an enclosing shade can arbitrate gestures without stealing
+ * scrubbing. A factory gives each region its own modifier state.
  */
 @Composable
 fun Media(
@@ -205,6 +213,7 @@ fun Media(
     mediaSquishiness: () -> Float = { 1f },
     location: Media.Location,
     expansion: () -> Float = { 0F },
+    headerGestureModifier: @Composable () -> Modifier = { Modifier },
 ) {
     val context = LocalContext.current
     val viewModel: MediaViewModel =
@@ -219,15 +228,17 @@ fun Media(
 
     viewModel.mediaUiEventLogger.logCarouselLocation(location)
 
-    CardCarousel(
-        viewModel = viewModel,
-        presentationStyle = presentationStyle,
-        behavior = behavior,
-        onDismissed = onDismissed,
-        modifier = modifier,
-        mediaSquishiness = mediaSquishiness,
-        expansion = expansion,
-    )
+    CompositionLocalProvider(LocalMediaHeaderGestureModifier provides headerGestureModifier) {
+        CardCarousel(
+            viewModel = viewModel,
+            presentationStyle = presentationStyle,
+            behavior = behavior,
+            onDismissed = onDismissed,
+            modifier = modifier,
+            mediaSquishiness = mediaSquishiness,
+            expansion = expansion,
+        )
+    }
 }
 
 /**
@@ -664,7 +675,7 @@ private fun ContentScope.CardForegroundContent(
                 .semantics { contentDescription = viewModel.contentDescription }
     ) {
         // Always add the first/top row, regardless of presentation style.
-        Box(modifier = Modifier.fillMaxWidth()) {
+        Box(modifier = Modifier.fillMaxWidth().then(LocalMediaHeaderGestureModifier.current())) {
             // Icon.
             Element(key = Media.Elements.AppIcon, modifier = modifier) {
                 Icon(
@@ -775,7 +786,10 @@ private fun ContentScope.CardForegroundContent(
             // Second row.
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(start = 16.dp, end = 16.dp).heightIn(min = 48.dp),
+                modifier =
+                    Modifier.then(LocalMediaHeaderGestureModifier.current())
+                        .padding(start = 16.dp, end = 16.dp)
+                        .heightIn(min = 48.dp),
             ) {
                 Metadata(
                     title = viewModel.title,
@@ -838,7 +852,11 @@ private fun ContentScope.CardForegroundContent(
                     subtitle = viewModel.subtitle,
                     isExplicit = viewModel.isExplicit,
                     color = Color.White,
-                    modifier = Modifier.weight(1f).padding(end = 8.dp).animateContentSize(),
+                    modifier =
+                        Modifier.weight(1f)
+                            .then(LocalMediaHeaderGestureModifier.current())
+                            .padding(end = 8.dp)
+                            .animateContentSize(),
                 )
 
                 CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
@@ -902,6 +920,7 @@ private fun ContentScope.CompactCardForeground(
         verticalAlignment = Alignment.CenterVertically,
         modifier =
             modifier
+                .then(LocalMediaHeaderGestureModifier.current())
                 .clickable(onClick = { viewModel.onClick(expandable) })
                 .semantics { contentDescription = viewModel.contentDescription }
                 .background(MaterialTheme.colorScheme.surfaceContainer)

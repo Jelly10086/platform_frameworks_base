@@ -21,47 +21,61 @@ import com.android.compose.animation.scene.Swipe
 import com.android.compose.animation.scene.UserAction
 import com.android.compose.animation.scene.UserActionResult
 import com.android.compose.animation.scene.UserActionResult.HideOverlay
+import com.android.compose.animation.scene.UserActionResult.ReplaceByOverlay
 import com.android.compose.animation.scene.UserActionResult.ShowOverlay
 import com.android.compose.animation.scene.UserActionResult.ShowOverlay.HideCurrentOverlays
 import com.android.systemui.qs.panels.ui.viewmodel.EditModeViewModel
 import com.android.systemui.scene.shared.model.Overlays
+import com.android.systemui.scene.shared.model.TransitionKeys
 import com.android.systemui.scene.ui.viewmodel.SceneContainerArea.BottomEdge
 import com.android.systemui.scene.ui.viewmodel.SceneContainerArea.TopEdgeStartHalf
 import com.android.systemui.scene.ui.viewmodel.UserActionsViewModel
+import com.android.systemui.shade.domain.interactor.ShadeModeInteractor
+import com.android.systemui.shade.shared.model.ShadeMode
 import dagger.assisted.AssistedFactory
 import dagger.assisted.AssistedInject
-import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.combine
 
 /** Models the UI state for the user actions for navigating to other scenes or overlays. */
 class QuickSettingsShadeOverlayActionsViewModel
 @AssistedInject
-constructor(private val editModeViewModel: EditModeViewModel) : UserActionsViewModel() {
+constructor(
+    private val editModeViewModel: EditModeViewModel,
+    private val shadeModeInteractor: ShadeModeInteractor,
+) : UserActionsViewModel() {
 
     override suspend fun hydrateActions(setActions: (Map<UserAction, UserActionResult>) -> Unit) {
-        editModeViewModel.isEditing
-            .map { isEditing ->
-                val hideQuickSettings = HideOverlay(Overlays.QuickSettingsShade)
-                buildMap {
-                    if (isEditing) {
-                        // When editing, the back gesture is handled outside of this view-model.
-                        // TODO(b/418003378): Back should go back to the QS grid layout.
-                        put(Swipe.Up(fromSource = BottomEdge), hideQuickSettings)
-                    } else {
-                        put(Back, hideQuickSettings)
-                        put(Swipe.Up, hideQuickSettings)
+        combine(editModeViewModel.isEditing, shadeModeInteractor.shadeMode) { isEditing, shadeMode ->
+            val hideQuickSettings = HideOverlay(Overlays.QuickSettingsShade)
+            buildMap {
+                if (isEditing) {
+                    // When editing, the back gesture is handled outside of this view-model.
+                    // TODO(b/418003378): Back should go back to the QS grid layout.
+                    put(Swipe.Up(fromSource = BottomEdge), hideQuickSettings)
+                } else {
+                    put(Back, hideQuickSettings)
+                    put(Swipe.Up, hideQuickSettings)
+                    if (shadeMode is ShadeMode.Dual) {
+                        put(
+                            Swipe.Left,
+                            ReplaceByOverlay(Overlays.NotificationsShade, TransitionKeys.ShadeSwipeLeft),
+                        )
+                        put(
+                            Swipe.Right,
+                            ReplaceByOverlay(Overlays.NotificationsShade, TransitionKeys.ShadeSwipeRight),
+                        )
                     }
-
-                    put(
-                        Swipe.Down(fromSource = TopEdgeStartHalf),
-                        ShowOverlay(
-                            Overlays.NotificationsShade,
-                            hideCurrentOverlays =
-                                HideCurrentOverlays.Some(Overlays.QuickSettingsShade),
-                        ),
-                    )
                 }
+
+                put(
+                    Swipe.Down(fromSource = TopEdgeStartHalf),
+                    ShowOverlay(
+                        Overlays.NotificationsShade,
+                        hideCurrentOverlays = HideCurrentOverlays.Some(Overlays.QuickSettingsShade),
+                    ),
+                )
             }
-            .collect { actions -> setActions(actions) }
+        }.collect { actions -> setActions(actions) }
     }
 
     @AssistedFactory

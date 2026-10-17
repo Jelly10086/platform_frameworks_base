@@ -23,6 +23,7 @@ import androidx.test.filters.SmallTest
 import com.android.compose.animation.scene.Back
 import com.android.compose.animation.scene.Swipe
 import com.android.compose.animation.scene.UserActionResult.HideOverlay
+import com.android.compose.animation.scene.UserActionResult.ReplaceByOverlay
 import com.android.compose.animation.scene.UserActionResult.ShowOverlay
 import com.android.compose.animation.scene.UserActionResult.ShowOverlay.HideCurrentOverlays
 import com.android.systemui.Flags.FLAG_DUAL_SHADE
@@ -35,8 +36,11 @@ import com.android.systemui.kosmos.testScope
 import com.android.systemui.kosmos.useUnconfinedTestDispatcher
 import com.android.systemui.lifecycle.activateIn
 import com.android.systemui.scene.shared.model.Overlays
+import com.android.systemui.scene.shared.model.TransitionKeys
 import com.android.systemui.scene.ui.viewmodel.SceneContainerArea
 import com.android.systemui.shade.domain.interactor.enableDualShade
+import com.android.systemui.shade.domain.interactor.enableSingleShade
+import com.android.systemui.shade.domain.interactor.enableSplitShade
 import com.android.systemui.shade.ui.viewmodel.notificationsShadeOverlayActionsViewModel
 import com.android.systemui.testKosmos
 import com.google.common.truth.Truth.assertThat
@@ -59,6 +63,27 @@ class NotificationsShadeOverlayActionsViewModelTest : SysuiTestCase() {
     fun setUp() {
         with(kosmos) { underTest.activateIn(testScope) }
     }
+
+    @Test
+    fun horizontalSwipe_onlyInDualShade() =
+        kosmos.runTest {
+            enableDualShade(wideLayout = false)
+            assertThat(actions?.get(Swipe.Left))
+                .isEqualTo(
+                    ReplaceByOverlay(Overlays.QuickSettingsShade, TransitionKeys.ShadeSwipeLeft)
+                )
+            assertThat(actions?.get(Swipe.Right))
+                .isEqualTo(
+                    ReplaceByOverlay(Overlays.QuickSettingsShade, TransitionKeys.ShadeSwipeRight)
+                )
+
+            enableSingleShade()
+            assertThat(actions?.get(Swipe.Left)).isNull()
+            assertThat(actions?.get(Swipe.Right)).isNull()
+            enableSplitShade()
+            assertThat(actions?.get(Swipe.Left)).isNull()
+            assertThat(actions?.get(Swipe.Right)).isNull()
+        }
 
     @Test
     fun up_hidesShade() =

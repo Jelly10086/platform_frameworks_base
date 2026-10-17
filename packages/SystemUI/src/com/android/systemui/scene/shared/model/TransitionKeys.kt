@@ -33,6 +33,10 @@ object TransitionKeys {
     /** A scene transition that can collapse the Shade slightly faster than a normal collapse. */
     val SlightlyFasterShadeTransition = TransitionKey("SlightlyFasterShadeTransition")
 
+    /** Physical swipe direction, independent of the shade's identity or layout direction. */
+    val ShadeSwipeLeft = TransitionKey("ShadeSwipeLeft")
+    val ShadeSwipeRight = TransitionKey("ShadeSwipeRight")
+
     /** A scene transition that should happen instantly, i.e. without animation. */
     val Instant = TransitionKey("Instant")
 

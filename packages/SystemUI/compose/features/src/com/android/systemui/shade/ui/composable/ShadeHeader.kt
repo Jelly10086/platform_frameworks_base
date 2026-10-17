@@ -30,7 +30,6 @@ import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -63,7 +62,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.layoutId
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -128,7 +126,6 @@ import com.android.systemui.statusbar.systemstatusicons.ui.compose.SystemStatusI
 import com.android.systemui.statusbar.systemstatusicons.ui.compose.SystemStatusIconsLegacy
 import com.android.systemui.util.composable.kairos.ActivatedKairosSpec
 import com.android.systemui.util.kotlin.toDp
-import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
@@ -493,29 +490,6 @@ fun ContentScope.OverlayShadeHeader(
         },
     )
 }
-
-/** Switches between dual-shade panels after a deliberate horizontal swipe on the header. */
-fun Modifier.switchShadeOnHorizontalSwipe(
-    swipeLeft: Boolean,
-    onSwipe: () -> Unit,
-): Modifier =
-    pointerInput(swipeLeft, onSwipe) {
-        var dragDistance = 0f
-        detectHorizontalDragGestures(
-            onDragStart = { dragDistance = 0f },
-            onDragEnd = {
-                val threshold = maxOf(size.width * 0.25f, viewConfiguration.touchSlop * 2)
-                if (abs(dragDistance) >= threshold && (dragDistance < 0) == swipeLeft) {
-                    onSwipe()
-                }
-            },
-            onDragCancel = { dragDistance = 0f },
-            onHorizontalDrag = { change, dragAmount ->
-                dragDistance += dragAmount
-                change.consume()
-            },
-        )
-    }
 
 /** The header that appears at the top of the Quick Settings shade overlay. */
 @Composable

@@ -377,10 +377,19 @@ private class DragControllerImpl(
 
         val effectiveDragOffset = swipeAnimation.effectiveDragOffset
         val distance = swipeAnimation.distance()
+        val thresholdDistance =
+            swipeAnimation.contentTransition.transformationSpec.distance as? ThresholdSwipeDistance
 
         val shouldCommitSwipe =
             when {
                 distance == DistanceUnspecified -> false
+                thresholdDistance != null && !swipeAnimation.requiresFullDistanceSwipe ->
+                    thresholdDistance.shouldCommit(
+                        density = draggableHandler.layoutImpl.density,
+                        offset = effectiveDragOffset,
+                        distance = distance,
+                        velocity = velocity,
+                    )
                 UserActionGestureFlag.isEnabled ->
                     shouldCommitSwipeWithUserActionGesture(
                         effectiveDragOffset = effectiveDragOffset,
@@ -404,7 +413,12 @@ private class DragControllerImpl(
         val targeContent =
             if (shouldCommitSwipe) swipeAnimation.toContent else swipeAnimation.fromContent
 
-        return swipeAnimation.animateOffset(velocity, targeContent, awaitFling = awaitFling)
+        return swipeAnimation.animateOffset(
+            velocity,
+            targeContent,
+            spec = thresholdDistance?.settleSpec,
+            awaitFling = awaitFling,
+        )
     }
 
     /**

@@ -61,7 +61,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onLayoutRectChanged
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.dimensionResource
 import androidx.compose.ui.res.painterResource
@@ -70,7 +69,6 @@ import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpSize
-import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.android.compose.PlatformSliderDefaults
@@ -116,7 +114,7 @@ import com.android.systemui.shade.ui.composable.OverlayShade
 import com.android.systemui.shade.ui.composable.OverlayShadeHeader
 import com.android.systemui.shade.ui.composable.QuickSettingsOverlayHeader
 import com.android.systemui.shade.ui.composable.QuickSettingsOverlayPrivacyChip
-import com.android.systemui.shade.ui.composable.switchShadeOnHorizontalSwipe
+import com.android.systemui.shade.ui.composable.shadePanelSwipe
 import com.android.systemui.statusbar.notification.stack.shared.model.ShadeScrimBounds
 import com.android.systemui.statusbar.notification.stack.shared.model.ShadeScrimShape
 import com.android.systemui.statusbar.notification.stack.ui.view.NotificationScrollView
@@ -206,6 +204,7 @@ constructor(
                     .thenIf(showBrightnessMirror) { Modifier.gesturesDisabled() }
         ) {
             OverlayShade(
+                slidingContentElement = OverlayShade.Elements.QuickSettingsSlidingContent,
                 panelElement = QuickSettingsShade.Elements.Panel,
                 alignmentOnWideScreens = Alignment.End,
                 statusBarHeightPx = contentViewModel.statusBarHeightPx,
@@ -339,7 +338,7 @@ private fun ContentScope.QuickSettingsContainer(
                     isTransparencyEnabled = contentViewModel.isTransparencyEnabled,
                     volumeSliderViewModel = contentViewModel.volumeSliderViewModel,
                     audioDetailsViewModelFactory = contentViewModel.audioDetailsViewModelFactory,
-                    isDualShade = contentViewModel.shadeModeInteractor.isDualShade,
+                    isDualShade = contentViewModel.shadeModeInteractor.isDualShade && !isEditing,
                     modifier = modifier.sysuiResTag("quick_settings_panel"),
                 )
             }
@@ -359,7 +358,6 @@ private fun ContentScope.QuickSettingsLayout(
     isDualShade: Boolean,
     modifier: Modifier = Modifier,
 ) {
-    val isRtl = LocalLayoutDirection.current == LayoutDirection.Rtl
     // The scene-based overlay is the active QS container on this device. Read the raw style flow
     // here because the composition local is not guaranteed to reach this isolated overlay scope.
     val tileStyle by qsContainerViewModel.brightnessSliderViewModel.tileStyleFlow.collectAsState()
@@ -367,16 +365,6 @@ private fun ContentScope.QuickSettingsLayout(
     val brightnessSettings = rememberQsBrightnessSettings()
     val brightnessAtTop = brightnessSettings.sliderAtTop
     val showBrightnessSlider = brightnessSettings.showSlider != 0
-    val switchToNotificationsModifier =
-        if (isDualShade) {
-            Modifier.switchShadeOnHorizontalSwipe(
-                swipeLeft = isRtl,
-                onSwipe = qsContainerViewModel.shadeHeaderViewModel::onNotificationIconChipClicked,
-            )
-        } else {
-            Modifier
-        }
-
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = modifier.padding(horizontal = QuickSettingsShade.Dimensions.HorizontalPadding),
@@ -400,7 +388,7 @@ private fun ContentScope.QuickSettingsLayout(
                 Modifier.fillMaxWidth()
                     .requiredHeight(QuickSettingsShade.Dimensions.ToolbarHeight)
                     .sysuiResTag("quick_settings_toolbar")
-                    .then(switchToNotificationsModifier),
+                    .shadePanelSwipe(enabled = isDualShade),
             viewModel = toolbarViewModel,
             isFullyVisible = { layoutState.isIdle(contentKey) },
         )
@@ -412,7 +400,7 @@ private fun ContentScope.QuickSettingsLayout(
                 viewModel = qsContainerViewModel.shadeHeaderViewModel,
                 modifier =
                     Modifier.element(QuickSettingsShade.Elements.Header)
-                        .then(switchToNotificationsModifier),
+                        .shadePanelSwipe(enabled = isDualShade),
             )
             VerticalSeparator(QuickSettingsShade.Dimensions.ShortPadding)
         }
@@ -425,6 +413,13 @@ private fun ContentScope.QuickSettingsLayout(
                 onDismissed = qsContainerViewModel::onMediaSwipeToDismiss,
                 modifier = Modifier,
                 location = Media.Location.QS,
+                headerGestureModifier = {
+                    Modifier.shadePanelSwipe(
+                        enabled = isDualShade,
+                        diagonalOnly = true,
+                        blockVerticalScroll = true,
+                    )
+                },
             )
 
             if (qsContainerViewModel.showMedia) {
