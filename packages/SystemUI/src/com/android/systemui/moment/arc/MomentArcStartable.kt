@@ -37,7 +37,7 @@ constructor(
     private val settingsObserver =
         object : ContentObserver(mainHandler) {
             override fun onChange(selfChange: Boolean) {
-                if (!controller.isMomentArcEnabled()) controller.hide()
+                if (!controller.isMomentArcEnabled()) controller.hide(immediate = true)
             }
         }
 
@@ -65,20 +65,20 @@ constructor(
 
     private val screenOffReceiver =
         object : BroadcastReceiver() {
-            override fun onReceive(context: Context, intent: Intent) = controller.hide()
+            override fun onReceive(context: Context, intent: Intent) = controller.hide(immediate = true)
         }
 
     private val userCallback =
         object : UserTracker.Callback {
-            override fun onBeforeUserSwitching(newUser: Int) = controller.hide()
+            override fun onBeforeUserSwitching(newUser: Int) = controller.hide(immediate = true)
 
-            override fun onUserChanged(newUser: Int, userContext: Context) = controller.hide()
+            override fun onUserChanged(newUser: Int, userContext: Context) = controller.hide(immediate = true)
         }
 
     private val wakefulnessObserver =
         object : WakefulnessLifecycle.Observer {
             override fun onStartedGoingToSleep() {
-                controller.hide()
+                controller.hide(immediate = true)
             }
         }
 

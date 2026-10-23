@@ -10,7 +10,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.LauncherApps
 import android.content.pm.ShortcutInfo
-import android.graphics.Outline
 import android.graphics.drawable.Drawable
 import android.net.Uri
 import android.os.Handler
@@ -19,15 +18,17 @@ import android.os.SystemClock
 import android.os.UserHandle
 import android.provider.Settings
 import android.util.Log
-import android.view.View
-import android.view.ViewOutlineProvider
 import android.view.WindowManager
-import android.widget.ImageView
+import android.widget.Toast
 import com.android.systemui.dagger.SysUISingleton
+import com.android.systemui.dagger.qualifiers.Background
 import com.android.systemui.res.R
 import com.android.systemui.settings.UserTracker
 import javax.inject.Inject
-import kotlin.math.min
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
 
 @SysUISingleton
 class MomentArcController
@@ -35,58 +36,118 @@ class MomentArcController
 constructor(
     private val context: Context,
     private val userTracker: UserTracker,
+    @Background private val backgroundDispatcher: CoroutineDispatcher,
 ) {
     private val launcherApps = context.getSystemService(LauncherApps::class.java)
     private val windowManager = context.getSystemService(WindowManager::class.java)
     private val mainHandler = Handler(Looper.getMainLooper())
     private val maxLifetimeRunnable = Runnable { hide() }
     private var overlayView: MomentArcView? = null
+    private val exitingViews = HashSet<MomentArcView>()
     private var lastWindowManagerErrorLogTime = Long.MIN_VALUE
     private var suppressedWindowManagerErrorCount = 0
+
+    private val packageCallback = object : LauncherApps.Callback() {
+        private fun refresh(user: UserHandle) {
+            if (user == userTracker.userHandle) overlayView?.invalidateApps()
+        }
+        override fun onPackageRemoved(packageName: String, user: UserHandle) = refresh(user)
+        override fun onPackageAdded(packageName: String, user: UserHandle) = refresh(user)
+        override fun onPackageChanged(packageName: String, user: UserHandle) = refresh(user)
+        override fun onPackagesAvailable(packageNames: Array<String>, user: UserHandle, replacing: Boolean) = refresh(user)
+        override fun onPackagesUnavailable(packageNames: Array<String>, user: UserHandle, replacing: Boolean) = refresh(user)
+        override fun onPackagesSuspended(packageNames: Array<String>, user: UserHandle) = refresh(user)
+        override fun onPackagesUnsuspended(packageNames: Array<String>, user: UserHandle) = refresh(user)
+        override fun onShortcutsChanged(packageName: String, shortcuts: List<ShortcutInfo>, user: UserHandle) = refresh(user)
+    }
+
+    init {
+        runCatching { launcherApps.registerCallback(packageCallback, mainHandler) }
+            .onFailure { Log.w(TAG, "Failed to observe launcher package changes", it) }
+    }
 
     fun show(isLeft: Boolean, initialTouchX: Float = -1f, initialTouchY: Float = -1f) {
         hide()
         if (!isMomentArcEnabled()) return
 
         val view = MomentArcView(context, isLeft)
+        val user = userTracker.userHandle
         val innerTargets = getTargetSlots(INNER_RING_TARGETS, INNER_MAX_ICONS - 1)
         val outerTargets = getTargetSlots(OUTER_RING_TARGETS, OUTER_MAX_ICONS)
         val displayedInnerTargets = ArrayList<MomentArcTarget?>()
         val displayedOuterTargets = ArrayList<MomentArcTarget?>()
 
         innerTargets.forEach { target ->
-            val iconView = target?.let(::createIconView)
-            if (iconView != null) {
-                view.addView(iconView)
-            } else {
-                view.addView(View(context).apply { visibility = View.INVISIBLE })
-            }
-            displayedInnerTargets.add(if (iconView != null) target else null)
+            val icon = target?.let(::loadTargetIcon)
+            view.addIcon(icon)
+            displayedInnerTargets.add(if (icon != null) target else null)
         }
-        view.addView(ImageView(context).apply { setImageResource(R.drawable.ic_moment_arc_all_apps) })
+        view.addIcon(context.getDrawable(R.drawable.ic_moment_arc_all_apps), circularClip = false)
         outerTargets.forEach { target ->
-            val iconView = target?.let(::createIconView)
-            if (iconView != null) {
-                view.addView(iconView)
-            } else {
-                view.addView(View(context).apply { visibility = View.INVISIBLE })
-            }
-            displayedOuterTargets.add(if (iconView != null) target else null)
+            val icon = target?.let(::loadTargetIcon)
+            view.addIcon(icon)
+            displayedOuterTargets.add(if (icon != null) target else null)
         }
 
         view.setOnIconLaunchListener { index ->
-            if (!isMomentArcEnabled()) {
+            if (!isMomentArcEnabled() || user != userTracker.userHandle) {
                 hide()
                 return@setOnIconLaunchListener
             }
             when {
                 index < INNER_MAX_ICONS - 1 -> displayedInnerTargets.getOrNull(index)?.let(::launch)
-                index == INNER_MAX_ICONS - 1 -> launchAllApps()
+                index == INNER_MAX_ICONS - 1 -> {
+                    if (!view.showAllApps()) hide()
+                    return@setOnIconLaunchListener
+                }
                 else -> displayedOuterTargets.getOrNull(index - INNER_MAX_ICONS)?.let(::launch)
             }
             hide()
         }
-        view.setOnDismissListener(::hide)
+        view.setOnAllAppsOpenedListener { mainHandler.removeCallbacks(maxLifetimeRunnable) }
+        val configuredTargets = momentArcConfiguredTargets(innerTargets, outerTargets)
+        view.setAppsLoader {
+            withContext(backgroundDispatcher) {
+                val userContext = context.createContextAsUser(user, 0)
+                val pm = userContext.packageManager
+                val arcApps = configuredTargets.mapNotNull { (slot, target) ->
+                    currentCoroutineContext().ensureActive()
+                    runCatching {
+                        val packageName = when (target) {
+                            is MomentArcTarget.App -> target.packageName
+                            is MomentArcTarget.Shortcut -> target.packageName
+                            is MomentArcTarget.Activity -> target.component.packageName
+                        }
+                        val app = pm.getApplicationInfo(packageName, 0)
+                        if (!app.enabled) return@runCatching null
+                        val shortcut = (target as? MomentArcTarget.Shortcut)?.let(::getShortcutInfo)
+                        if (target is MomentArcTarget.Shortcut && (shortcut == null || !shortcut.isEnabled)) {
+                            return@runCatching null
+                        }
+                        val label = shortcut?.shortLabel?.toString() ?: app.loadLabel(pm).toString()
+                        val icon = if (shortcut != null) {
+                            launcherApps.getShortcutBadgedIconDrawable(shortcut, context.resources.displayMetrics.densityDpi)
+                                ?: app.loadIcon(pm)
+                        } else app.loadIcon(pm)
+                        MomentArcApp("arc:$slot", label, icon, target)
+                    }.getOrNull()
+                }
+                MomentArcApps(
+                    arcApps,
+                    groupMomentArcApps(loadMomentArcApps(userContext, user), userContext.resources.configuration.locales[0]),
+                )
+            }
+        }
+        view.setOnAppLaunchListener { target ->
+            if (overlayView === view && user == userTracker.userHandle && isMomentArcEnabled()) {
+                if (launch(target)) {
+                    if (!view.animateAppLaunch {
+                        if (overlayView === view) hide(immediate = true)
+                    }) hide()
+                }
+            }
+        }
+        view.setOnDismissListener { hide() }
         if (initialTouchX >= 0f && initialTouchY >= 0f) {
             view.setInitialTouchPoint(initialTouchX, initialTouchY)
         }
@@ -100,6 +161,7 @@ constructor(
     }
 
     fun onTouchCoordinates(x: Float, y: Float, isUp: Boolean, isCancelled: Boolean) {
+        if (overlayView?.acceptsGestureBroadcast == false) return
         if (!isMomentArcEnabled() || isCancelled) {
             overlayView?.dispatchTouchCoordinates(x, y, false, true) ?: hide()
             return
@@ -107,16 +169,23 @@ constructor(
         overlayView?.dispatchTouchCoordinates(x, y, isUp, false)
     }
 
-    fun hide() {
+    fun hide(immediate: Boolean = false) {
         mainHandler.removeCallbacks(maxLifetimeRunnable)
+        if (immediate) exitingViews.toList().forEach(::removeOverlay)
         val view = overlayView ?: return
         overlayView = null
-        view.animateExit {
-            try {
-                windowManager.removeView(view)
-            } catch (e: Exception) {
-                logWindowManagerFailure("Failed to remove MomentArc view", e)
-            }
+        if (immediate) removeOverlay(view) else {
+            exitingViews.add(view)
+            view.animateExit { removeOverlay(view) }
+        }
+    }
+
+    private fun removeOverlay(view: MomentArcView) {
+        exitingViews.remove(view)
+        try {
+            windowManager.removeView(view)
+        } catch (e: Exception) {
+            logWindowManagerFailure("Failed to remove MomentArc view", e)
         }
     }
 
@@ -136,28 +205,10 @@ constructor(
             ) != 0
     }
 
-    private fun createIconView(target: MomentArcTarget): ImageView? {
-        val icon = runCatching { loadIcon(target) }
+    private fun loadTargetIcon(target: MomentArcTarget): Drawable? =
+        runCatching { loadIcon(target) }
             .onFailure { Log.w(TAG, "Failed to load icon for $target", it) }
-            .getOrNull() ?: return null
-        return ImageView(context).apply {
-            setImageDrawable(icon)
-            outlineProvider =
-                object : ViewOutlineProvider() {
-                    override fun getOutline(view: View, outline: Outline) {
-                        val size = min(view.width, view.height)
-                        if (size <= 0) {
-                            outline.setEmpty()
-                            return
-                        }
-                        val left = (view.width - size) / 2
-                        val top = (view.height - size) / 2
-                        outline.setRoundRect(left, top, left + size, top + size, size / 2f)
-                    }
-                }
-            clipToOutline = true
-        }
-    }
+            .getOrNull()
 
     private fun loadIcon(target: MomentArcTarget): Drawable {
         return when (target) {
@@ -169,6 +220,9 @@ constructor(
                     context.resources.displayMetrics.densityDpi,
                 ) ?: fallbackAppIcon(target.packageName)
             }
+            is MomentArcTarget.Activity -> launcherApps.getActivityList(
+                target.component.packageName, UserHandle.of(target.userId)
+            ).first { it.componentName == target.component }.getBadgedIcon(context.resources.displayMetrics.densityDpi)
         }
     }
 
@@ -177,29 +231,39 @@ constructor(
         return packageManager.getApplicationInfo(packageName, 0).loadIcon(packageManager)
     }
 
-    private fun launch(target: MomentArcTarget) {
-        when (target) {
+    private fun launch(target: MomentArcTarget): Boolean {
+        val launched = when (target) {
             is MomentArcTarget.App -> launchPackage(target.packageName)
             is MomentArcTarget.Shortcut -> launchShortcut(target)
+            is MomentArcTarget.Activity -> runCatching {
+                check(target.userId == userTracker.userId)
+                check(launcherApps.isActivityEnabled(target.component, UserHandle.of(target.userId)))
+                val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+                    .setComponent(target.component)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
+                context.startActivityAsUser(intent, momentOptions().toBundle(), UserHandle.of(target.userId))
+            }.onFailure { Log.w(TAG, "Failed to launch ${target.component}", it) }.isSuccess
         }
+        if (!launched) Toast.makeText(context, R.string.moment_arc_launch_failed, Toast.LENGTH_SHORT).show()
+        return launched
     }
 
-    private fun launchPackage(packageName: String) {
-        val intent = currentUserContext().packageManager.getLaunchIntentForPackage(packageName)
-            ?: return
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
-        runCatching {
+    private fun launchPackage(packageName: String): Boolean {
+        return runCatching {
+            val intent = checkNotNull(currentUserContext().packageManager.getLaunchIntentForPackage(packageName))
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
             context.startActivityAsUser(intent, momentOptions().toBundle(), userTracker.userHandle)
-        }.onFailure { Log.w(TAG, "Failed to launch package $packageName", it) }
+        }.onFailure { Log.w(TAG, "Failed to launch package $packageName", it) }.isSuccess
     }
 
-    private fun launchShortcut(target: MomentArcTarget.Shortcut) {
+    private fun launchShortcut(target: MomentArcTarget.Shortcut): Boolean {
         if (target.userId != userTracker.userId) {
             Log.w(TAG, "Ignoring shortcut target for a non-current user")
-            return
+            return false
         }
         val options = momentOptions().apply { setApplyMultipleTaskFlagForShortcut(true) }
-        runCatching {
+        return runCatching {
+            check(getShortcutInfo(target)?.isEnabled == true)
             launcherApps.startShortcut(
                 target.packageName,
                 target.shortcutId,
@@ -209,17 +273,7 @@ constructor(
             )
         }.onFailure {
             Log.w(TAG, "Failed to launch shortcut ${target.packageName}/${target.shortcutId}", it)
-        }
-    }
-
-    private fun launchAllApps() {
-        val intent = Intent().apply {
-            setClassName(SETTINGS_PACKAGE, SETTINGS_ALL_APPS_ACTIVITY)
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
-        }
-        runCatching {
-            context.startActivityAsUser(intent, momentOptions().toBundle(), userTracker.userHandle)
-        }.onFailure { Log.w(TAG, "Failed to launch all apps picker", it) }
+        }.isSuccess
     }
 
     private fun momentOptions() =
@@ -306,18 +360,12 @@ constructor(
         suppressedWindowManagerErrorCount = 0
     }
 
-    private sealed interface MomentArcTarget {
-        data class App(val packageName: String) : MomentArcTarget
-        data class Shortcut(val packageName: String, val shortcutId: String, val userId: Int) :
-            MomentArcTarget
-    }
-
     private companion object {
         const val TAG = "MomentArc"
         const val WINDOW_MANAGER_ERROR_LOG_INTERVAL_MS = 30_000L
         const val MAX_LIFETIME_MS = 10_000L
-        const val INNER_MAX_ICONS = 6
-        const val OUTER_MAX_ICONS = 7
+        const val INNER_MAX_ICONS = MomentArcGeometry.INNER_COUNT
+        const val OUTER_MAX_ICONS = MomentArcGeometry.OUTER_COUNT
         const val ENTRY_SEPARATOR = "|"
         const val APP_PREFIX = "app:"
         const val SHORTCUT_PREFIX = "shortcut:"
@@ -325,8 +373,5 @@ constructor(
         const val FIELD_SEPARATOR = ":"
         const val INNER_RING_TARGETS = "moment_arc_selected_targets"
         const val OUTER_RING_TARGETS = "moment_arc_outer_ring_selected_targets"
-        const val SETTINGS_PACKAGE = "org.uwuaosp.settingsext"
-        const val SETTINGS_ALL_APPS_ACTIVITY =
-            "org.uwuaosp.settingsext.moment.MomentAllAppsActivity"
     }
 }

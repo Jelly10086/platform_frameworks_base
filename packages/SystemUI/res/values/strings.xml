@@ -5061,4 +5061,11 @@
     <!-- Accessibility label for the thumbs down button on attribution dialog. [CHAR_LIMIT=NONE] -->
     <string name="ace_attribution_thumbs_down_button_accessibility_description">Thumbs down feedback button</string>
 
+    <!-- MomentArc's in-window application browser. -->
+    <string name="moment_arc_all_apps_title">All apps</string>
+    <string name="moment_arc_apps_section">MomentArc</string>
+    <string name="moment_arc_launch_failed">Unable to open this app</string>
+    <string name="moment_arc_apps_load_failed">Couldn\'t load apps. Tap to retry.</string>
+    <string name="moment_arc_no_apps">No available apps</string>
+    <string name="moment_arc_close_all_apps">Close all apps</string>
 </resources>

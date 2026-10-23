@@ -4,50 +4,165 @@
  */
 package com.android.systemui.moment.arc
 
-import android.animation.Animator
-import android.animation.AnimatorListenerAdapter
-import android.animation.AnimatorSet
-import android.animation.ObjectAnimator
 import android.content.Context
-import android.graphics.Color
+import android.content.res.Configuration
 import android.graphics.PixelFormat
-import android.graphics.drawable.ColorDrawable
+import android.graphics.drawable.Drawable
 import android.os.VibrationEffect
 import android.os.Vibrator
+import android.os.Handler
+import android.os.Looper
+import android.util.Log
 import android.view.Gravity
-import android.view.View
-import android.view.ViewGroup
+import android.view.KeyEvent
+import android.view.ViewConfiguration
 import android.view.WindowInsets
 import android.view.WindowManager
-import android.view.animation.AccelerateInterpolator
-import android.view.animation.DecelerateInterpolator
-import kotlin.math.cos
-import kotlin.math.min
-import kotlin.math.sin
+import android.widget.FrameLayout
+import android.window.OnBackInvokedCallback
+import android.window.OnBackInvokedDispatcher
+import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.ViewCompositionStrategy
+import com.android.systemui.compose.ComposeInitializer
 
-class MomentArcView(context: Context, private val isLeft: Boolean) : ViewGroup(context) {
+/** Window/input host only; the backdrop and every icon are drawn by Compose. */
+class MomentArcView(context: Context, private val isLeft: Boolean) : FrameLayout(context) {
     private val windowManager = context.getSystemService(WindowManager::class.java)
     private val vibrator = context.getSystemService(Vibrator::class.java)
     private var hasAnimated = false
     private var selectedChildIndex = -1
     private var lastVibratedIndex = -1
     private var isTouching = false
-    private var isExiting = false
+    private val uiState = MomentArcUiState()
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var morePending = false
+    private var moreHoldX = 0f
+    private var moreHoldY = 0f
+    private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop
+    private val openMore = Runnable {
+        morePending = false
+        if (isTouching && selectedChildIndex == MORE_INDEX && !isExiting) {
+            val x = lastTouchX
+            val y = lastTouchY
+            if (showAllApps(continueGesture = true, x = x, y = y)) {
+                vibrator?.vibrate(VibrationEffect.createOneShot(10, VibrationEffect.DEFAULT_AMPLITUDE))
+            } else dismissListener?.invoke()
+        }
+    }
+    private var lastTouchX = 0f
+    private var lastTouchY = 0f
+    private var gestureVisitedPanel = false
+    private val isExiting get() = uiState.exiting
     private var initialTouchX = -1f
     private var initialTouchY = -1f
     private var hasInitialTouchPoint = false
     private var iconLaunchListener: ((Int) -> Unit)? = null
     private var dismissListener: (() -> Unit)? = null
+    private var allAppsOpenedListener: (() -> Unit)? = null
     private val pendingTouchCoordinates = ArrayDeque<TouchCoordinates>()
-    private val runningAnimators = ArrayList<Animator>()
+    private val icons get() = uiState.icons
+    private var geometryReady = false
+    private val composeView = ComposeView(context)
+    var hasDirectInput = false
+        private set
+    private var appsLoader: (suspend () -> MomentArcApps)? = null
+    private var appLaunchListener: ((MomentArcTarget) -> Unit)? = null
+    private var backDispatcher: OnBackInvokedDispatcher? = null
+    private val backCallback = OnBackInvokedCallback { handleBack() }
 
     init {
-        setWillNotDraw(false)
-        background = ColorDrawable(Color.BLACK).apply { alpha = 0 }
+        addView(composeView, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+        composeView.setViewCompositionStrategy(
+            ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed
+        )
+        composeView.setContent {
+            MomentArcContent(
+                uiState,
+                loadApps = { checkNotNull(appsLoader).invoke() },
+                onLaunch = { appLaunchListener?.invoke(it) },
+                onDismiss = { if (!uiState.launchingApp) dismissListener?.invoke() },
+                directInput = { hasDirectInput },
+                onArcTouch = ::dispatchTouchCoordinates,
+                onGestureSelection = {
+                    vibrator?.vibrate(VibrationEffect.createOneShot(10, VibrationEffect.DEFAULT_AMPLITUDE))
+                },
+            )
+        }
+    }
+
+    fun addIcon(drawable: Drawable?, circularClip: Boolean = true) {
+        check(!hasAnimated) { "MomentArc icons must be supplied before layout" }
+        icons.add(MomentArcUiState.Icon(drawable, circularClip))
+    }
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        ComposeInitializer.onAttachedToWindow(this)
     }
 
     fun setOnIconLaunchListener(listener: (Int) -> Unit) { iconLaunchListener = listener }
     fun setOnDismissListener(listener: () -> Unit) { dismissListener = listener }
+    fun setOnAllAppsOpenedListener(listener: () -> Unit) { allAppsOpenedListener = listener }
+    internal fun setAppsLoader(loader: suspend () -> MomentArcApps) { appsLoader = loader }
+    internal fun setOnAppLaunchListener(listener: (MomentArcTarget) -> Unit) { appLaunchListener = listener }
+    fun invalidateApps() { uiState.invalidateApps() }
+
+    fun showAllApps(continueGesture: Boolean = false, x: Float = 0f, y: Float = 0f): Boolean {
+        if (isExiting || uiState.panelGeometry == null) return false
+        if (!hasDirectInput) {
+            val params = layoutParams as? WindowManager.LayoutParams ?: return false
+            val oldFlags = params.flags
+            params.flags = params.flags and (WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE).inv()
+            try {
+                windowManager.updateViewLayout(this, params)
+            } catch (e: Exception) {
+                params.flags = oldFlags
+                Log.w("MomentArc", "Failed to transfer Arc window input", e)
+                return false
+            }
+            hasDirectInput = true
+            hasInitialTouchPoint = false
+            pendingTouchCoordinates.clear()
+            isFocusableInTouchMode = true
+            requestFocus()
+            backDispatcher = findOnBackInvokedDispatcher()
+            backDispatcher?.registerOnBackInvokedCallback(OnBackInvokedDispatcher.PRIORITY_OVERLAY, backCallback)
+        }
+        cancelMoreHold()
+        if (continueGesture) {
+            gestureVisitedPanel = uiState.panelGeometry?.bounds?.contains(x.toInt(), y.toInt()) == true
+            uiState.startContinuousGesture(x, y)
+        }
+        uiState.openAllApps()
+        allAppsOpenedListener?.invoke()
+        return true
+    }
+
+    val acceptsGestureBroadcast get() = !hasDirectInput || uiState.continuousGesture
+
+    private fun handleBack() {
+        if (isExiting || uiState.launchingApp) return
+        if (uiState.allAppsRequested) {
+            cancelMoreHold()
+            resetTouchState()
+            uiState.returnToArc()
+        } else if (!uiState.panelVisible) dismissListener?.invoke()
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (hasDirectInput && event.keyCode == KeyEvent.KEYCODE_BACK) {
+            if (event.action == KeyEvent.ACTION_UP && !event.isCanceled) handleBack()
+            return true
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        invalidateApps()
+        requestLayout()
+    }
 
     fun setInitialTouchPoint(x: Float, y: Float) {
         initialTouchX = x
@@ -56,53 +171,25 @@ class MomentArcView(context: Context, private val isLeft: Boolean) : ViewGroup(c
     }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-        measureChildren(widthMeasureSpec, heightMeasureSpec)
-        setMeasuredDimension(
-            MeasureSpec.getSize(widthMeasureSpec),
-            MeasureSpec.getSize(heightMeasureSpec),
+        // Supply pixel sizes before Compose measures, avoiding a zero-sized first frame.
+        val arcGeometry = currentGeometry()
+        uiState.updateGeometry(arcGeometry)
+        val metrics = windowManager.currentWindowMetrics
+        uiState.panelGeometry = MomentArcPanelGeometry.calculate(
+            metrics.bounds.width(), metrics.bounds.height(),
+            metrics.windowInsets.getInsetsIgnoringVisibility(WindowInsets.Type.systemBars()),
+            resources.displayMetrics.density,
+            metrics.windowInsets.getInsetsIgnoringVisibility(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout()),
         )
+        super.onMeasure(widthMeasureSpec, heightMeasureSpec)
     }
 
-    override fun generateDefaultLayoutParams() =
-        LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT)
-
-    override fun checkLayoutParams(params: LayoutParams?) = params != null
-
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
-        if (childCount == 0) return
-        val bounds = windowManager.currentWindowMetrics.bounds
-        val screenWidth = bounds.width()
-        val screenHeight = bounds.height()
-        val navbarHeight = windowManager.currentWindowMetrics.windowInsets
-            .getInsets(WindowInsets.Type.navigationBars()).bottom
-        val centerX = screenWidth * if (isLeft) CIRCLE_X else 1f - CIRCLE_X
-        val centerY = screenHeight * CIRCLE_Y - navbarHeight
-        val dimension = min(screenWidth, screenHeight)
-        val iconRadius = dimension * ICON_SIZE_RATIO / 2f
-
-        for (index in 0 until childCount) {
-            val inner = index < INNER_CHILD_COUNT
-            val localIndex = if (inner) index else index - INNER_CHILD_COUNT
-            val total = if (inner) INNER_CHILD_COUNT else OUTER_CHILD_COUNT
-            val radius = dimension * if (inner) INNER_RADIUS_RATIO else OUTER_RADIUS_RATIO
-            val spacing = if (inner) INNER_SPACING else OUTER_SPACING
-            val start = if (inner) INNER_ANGLE_START else OUTER_ANGLE_START
-            val end = if (inner) INNER_ANGLE_END else OUTER_ANGLE_END
-            val angle = start + ((total + 1) / 2f - (localIndex + 1)) *
-                ((end - start) / (total + 1)) * spacing
-            val horizontal = radius * cos(Math.toRadians(angle.toDouble()))
-            val vertical = radius * sin(Math.toRadians(angle.toDouble()))
-            val x = if (isLeft) centerX + horizontal else centerX - horizontal
-            val y = centerY - vertical
-            getChildAt(index).layout(
-                (x - iconRadius).toInt(),
-                (y - iconRadius).toInt(),
-                (x + iconRadius).toInt(),
-                (y + iconRadius).toInt(),
-            )
-        }
+        super.onLayout(changed, left, top, right, bottom)
+        if (icons.isEmpty()) return
+        geometryReady = true
         if (!hasAnimated) {
-            startIntroAnimation()
+            uiState.ready = true
             hasAnimated = true
         }
         while (pendingTouchCoordinates.isNotEmpty()) {
@@ -114,12 +201,33 @@ class MomentArcView(context: Context, private val isLeft: Boolean) : ViewGroup(c
 
     fun dispatchTouchCoordinates(x: Float, y: Float, isUp: Boolean, isCancelled: Boolean) {
         if (isExiting) return
+        if (uiState.continuousGesture) {
+            if (isUp || isCancelled) {
+                val inside = uiState.panelGeometry?.bounds?.contains(x.toInt(), y.toInt()) == true
+                val app = if (isCancelled || !uiState.panelInteractive || !inside) null
+                    else uiState.selectionAt(x, y)
+                uiState.endContinuousGesture()
+                resetTouchState()
+                val onHandle = uiState.panelGeometry?.handleTouchBounds?.contains(x.toInt(), y.toInt()) == true
+                if (!isCancelled && !inside && (gestureVisitedPanel || onHandle)) dismissListener?.invoke()
+                if (app != null) appLaunchListener?.invoke(app.target)
+                gestureVisitedPanel = false
+            } else {
+                if (uiState.panelGeometry?.bounds?.contains(x.toInt(), y.toInt()) == true) {
+                    gestureVisitedPanel = true
+                }
+                uiState.moveContinuousGesture(x, y)
+            }
+            return
+        }
+        if (hasDirectInput && uiState.panelVisible) return
         if (isCancelled) {
             pendingTouchCoordinates.clear()
+            cancelMoreHold()
             cancelTouch()
             return
         }
-        if (!isLaidOut) {
+        if (!geometryReady) {
             pendingTouchCoordinates.addLast(TouchCoordinates(x, y, isUp, isCancelled))
             return
         }
@@ -127,52 +235,26 @@ class MomentArcView(context: Context, private val isLeft: Boolean) : ViewGroup(c
     }
 
     fun animateExit(onEnd: () -> Unit) {
-        if (isExiting) return
-        isExiting = true
-
-        val bounds = windowManager.currentWindowMetrics.bounds
-        val screenWidth = bounds.width()
-        val screenHeight = bounds.height()
-        val navbarHeight = windowManager.currentWindowMetrics.windowInsets
-            .getInsets(WindowInsets.Type.navigationBars()).bottom
-        val centerX = screenWidth * if (isLeft) CIRCLE_X else 1f - CIRCLE_X
-        val centerY = screenHeight * CIRCLE_Y - navbarHeight
-        val animations = ArrayList<Animator>(childCount * 3 + 1)
-
-        background?.let { drawable ->
-            animations.add(ObjectAnimator.ofInt(drawable, "alpha", drawable.alpha, 0))
+        uiState.exit(currentGeometry()) {
+            if (isAttachedToWindow) onEnd()
         }
-        for (index in 0 until childCount) {
-            val child = getChildAt(index)
-            val targetTranslationX = centerX - (child.left + child.width / 2f)
-            val targetTranslationY = centerY - (child.top + child.height / 2f)
-            animations.add(ObjectAnimator.ofFloat(child, "translationX", child.translationX,
-                targetTranslationX))
-            animations.add(ObjectAnimator.ofFloat(child, "translationY", child.translationY,
-                targetTranslationY))
-            animations.add(ObjectAnimator.ofFloat(child, "scaleX", child.scaleX, 0.8f))
-            animations.add(ObjectAnimator.ofFloat(child, "scaleY", child.scaleY, 0.8f))
-            animations.add(ObjectAnimator.ofFloat(child, "alpha", child.alpha, 0f))
-        }
+    }
 
-        val exitAnimator = AnimatorSet().apply {
-            playTogether(animations)
-            duration = EXIT_ANIMATION_DURATION_MS
-            interpolator = AccelerateInterpolator()
-            addListener(object : AnimatorListenerAdapter() {
-                override fun onAnimationEnd(animation: Animator) {
-                    if (isAttachedToWindow) onEnd()
-                }
-            })
-        }
-        startAnimator(exitAnimator)
+    fun animateAppLaunch(onEnd: () -> Unit): Boolean = uiState.animateAppLaunch {
+        if (isAttachedToWindow) onEnd()
     }
 
     override fun onDetachedFromWindow() {
-        runningAnimators.toList().forEach(Animator::cancel)
-        runningAnimators.clear()
+        cancelMoreHold()
+        uiState.endContinuousGesture()
+        gestureVisitedPanel = false
+        backDispatcher?.unregisterOnBackInvokedCallback(backCallback)
+        backDispatcher = null
         pendingTouchCoordinates.clear()
         resetTouchState()
+        geometryReady = false
+        composeView.disposeComposition()
+        ComposeInitializer.onDetachedFromWindow(this)
         super.onDetachedFromWindow()
     }
 
@@ -183,8 +265,14 @@ class MomentArcView(context: Context, private val isLeft: Boolean) : ViewGroup(c
         isCancelled: Boolean,
     ) {
         if (isCancelled) {
+            cancelMoreHold()
             cancelTouch()
             return
+        }
+        if (isUp) cancelMoreHold()
+        else {
+            lastTouchX = x
+            lastTouchY = y
         }
         when {
             !isTouching && !isUp -> {
@@ -200,7 +288,7 @@ class MomentArcView(context: Context, private val isLeft: Boolean) : ViewGroup(c
     }
 
     private fun finishTouch() {
-        if (selectedChildIndex in 0 until childCount) {
+        if (selectedChildIndex in icons.indices) {
             iconLaunchListener?.invoke(selectedChildIndex)
         } else {
             dismissListener?.invoke()
@@ -218,9 +306,9 @@ class MomentArcView(context: Context, private val isLeft: Boolean) : ViewGroup(c
             val ratio = step.toFloat() / PATH_STEPS
             val x = startX + (endX - startX) * ratio
             val y = startY + (endY - startY) * ratio
-            for (index in 0 until childCount) {
-                val child = getChildAt(index)
-                if (child.visibility == View.VISIBLE && x >= child.left && x <= child.right &&
+            for (index in icons.indices) {
+                val child = icons[index]
+                if (child.drawable != null && x >= child.left && x <= child.right &&
                     y >= child.top && y <= child.bottom
                 ) {
                     select(index)
@@ -232,9 +320,9 @@ class MomentArcView(context: Context, private val isLeft: Boolean) : ViewGroup(c
 
     private fun updateSelectedIcon(x: Float, y: Float) {
         var selected = -1
-        for (index in 0 until childCount) {
-            val child = getChildAt(index)
-            if (child.visibility == View.VISIBLE && x >= child.left && x <= child.right &&
+        for (index in icons.indices) {
+            val child = icons[index]
+            if (child.drawable != null && x >= child.left && x <= child.right &&
                 y >= child.top && y <= child.bottom
             ) {
                 selected = index
@@ -246,10 +334,19 @@ class MomentArcView(context: Context, private val isLeft: Boolean) : ViewGroup(c
 
     private fun select(index: Int) {
         if (selectedChildIndex != index) {
+            cancelMoreHold()
             selectedChildIndex = index
-            for (childIndex in 0 until childCount) {
-                val scale = if (childIndex == index) 1.15f else 1f
-                getChildAt(childIndex).animate().scaleX(scale).scaleY(scale).setDuration(100L).start()
+            uiState.select(index)
+            if (index == MORE_INDEX && isTouching && !uiState.panelVisible &&
+                icons[MORE_INDEX].bounds.contains(lastTouchX.toInt(), lastTouchY.toInt())
+            ) scheduleMoreHold(lastTouchX, lastTouchY)
+        } else if (index == MORE_INDEX && !uiState.panelVisible &&
+            icons[MORE_INDEX].bounds.contains(lastTouchX.toInt(), lastTouchY.toInt())
+        ) {
+            if (!morePending) scheduleMoreHold(lastTouchX, lastTouchY)
+            else if (kotlin.math.hypot(lastTouchX - moreHoldX, lastTouchY - moreHoldY) > touchSlop) {
+                mainHandler.removeCallbacks(openMore)
+                scheduleMoreHold(lastTouchX, lastTouchY)
             }
         }
         if (index >= 0 && index != lastVibratedIndex) {
@@ -258,57 +355,28 @@ class MomentArcView(context: Context, private val isLeft: Boolean) : ViewGroup(c
         }
     }
 
-    private fun startIntroAnimation() {
-        val backgroundAnimator = ObjectAnimator.ofInt(background, "alpha", 0, 128).apply {
-            duration = ANIMATION_DURATION_MS
-        }
-        startAnimator(backgroundAnimator)
-
-        val bounds = windowManager.currentWindowMetrics.bounds
-        val screenWidth = bounds.width()
-        val screenHeight = bounds.height()
-        val navbarHeight = windowManager.currentWindowMetrics.windowInsets
-            .getInsets(WindowInsets.Type.navigationBars()).bottom
-        val centerX = screenWidth * if (isLeft) CIRCLE_X else 1f - CIRCLE_X
-        val centerY = screenHeight * CIRCLE_Y - navbarHeight
-
-        for (index in 0 until childCount) {
-            val child = getChildAt(index)
-            child.alpha = 0f
-            child.scaleX = 0.8f
-            child.scaleY = 0.8f
-            child.translationX = centerX - (child.left + child.width / 2f)
-            child.translationY = centerY - (child.top + child.height / 2f)
-            val delay = index * 15L + if (index >= INNER_CHILD_COUNT) 100L else 0L
-            val iconAnimator = AnimatorSet().apply {
-                playTogether(
-                    ObjectAnimator.ofFloat(child, "translationX", child.translationX, 0f),
-                    ObjectAnimator.ofFloat(child, "translationY", child.translationY, 0f),
-                    ObjectAnimator.ofFloat(child, "scaleX", 0.8f, 1f),
-                    ObjectAnimator.ofFloat(child, "scaleY", 0.8f, 1f),
-                    ObjectAnimator.ofFloat(child, "alpha", 0f, 1f),
-                )
-                interpolator = DecelerateInterpolator(1.5f)
-                duration = ANIMATION_DURATION_MS + delay
-            }
-            startAnimator(iconAnimator)
-        }
-    }
-
-    private fun startAnimator(animator: Animator) {
-        runningAnimators.add(animator)
-        animator.addListener(object : AnimatorListenerAdapter() {
-            override fun onAnimationEnd(animation: Animator) {
-                runningAnimators.remove(animation)
-            }
-        })
-        animator.start()
-    }
-
     private fun resetTouchState() {
         isTouching = false
         selectedChildIndex = -1
         lastVibratedIndex = -1
+    }
+
+    private fun cancelMoreHold() {
+        if (morePending) mainHandler.removeCallbacks(openMore)
+        morePending = false
+    }
+
+    private fun scheduleMoreHold(x: Float, y: Float) {
+        moreHoldX = x
+        moreHoldY = y
+        morePending = true
+        mainHandler.postDelayed(openMore, MORE_HOLD_MS)
+    }
+
+    private fun currentGeometry(): MomentArcGeometry {
+        val metrics = windowManager.currentWindowMetrics
+        return MomentArcGeometry(metrics.bounds.width(), metrics.bounds.height(),
+            metrics.windowInsets.getInsets(WindowInsets.Type.navigationBars()).bottom, isLeft)
     }
 
     private data class TouchCoordinates(
@@ -319,22 +387,9 @@ class MomentArcView(context: Context, private val isLeft: Boolean) : ViewGroup(c
     )
 
     companion object {
-        private const val ANIMATION_DURATION_MS = 180L
-        private const val EXIT_ANIMATION_DURATION_MS = 150L
-        private const val CIRCLE_X = 0.1f
-        private const val CIRCLE_Y = 0.95f
-        private const val ICON_SIZE_RATIO = 0.1f
-        private const val INNER_RADIUS_RATIO = 0.4f
-        private const val OUTER_RADIUS_RATIO = 0.52f
-        private const val INNER_SPACING = 1.5f
-        private const val OUTER_SPACING = 1.2f
-        private const val INNER_ANGLE_START = 45f
-        private const val INNER_ANGLE_END = 135f
-        private const val OUTER_ANGLE_START = 30f
-        private const val OUTER_ANGLE_END = 150f
-        private const val INNER_CHILD_COUNT = 6
-        private const val OUTER_CHILD_COUNT = 7
         private const val PATH_STEPS = 5
+        private const val MORE_INDEX = MomentArcGeometry.INNER_COUNT - 1
+        private const val MORE_HOLD_MS = 180L
 
         fun createLayoutParams() =
             WindowManager.LayoutParams(
