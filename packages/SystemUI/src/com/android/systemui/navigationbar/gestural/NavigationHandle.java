@@ -20,16 +20,10 @@ import android.animation.ArgbEvaluator;
 import android.animation.ObjectAnimator;
 import android.annotation.ColorInt;
 import android.content.Context;
-import android.content.res.Configuration;
 import android.content.res.Resources;
-import android.database.ContentObserver;
 import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.drawable.Drawable;
-import android.os.Handler;
-import android.os.Looper;
-import android.os.UserHandle;
-import android.provider.Settings;
 import android.util.AttributeSet;
 import android.util.FloatProperty;
 import android.view.ContextThemeWrapper;
@@ -38,10 +32,8 @@ import android.view.animation.Interpolator;
 
 import com.android.app.animation.Interpolators;
 import com.android.settingslib.Utils;
-import com.android.systemui.Dependency;
 import com.android.systemui.navigationbar.views.buttons.ButtonInterface;
 import com.android.systemui.res.R;
-import com.android.systemui.settings.UserTracker;
 
 public class NavigationHandle extends View implements ButtonInterface {
 
@@ -55,21 +47,6 @@ public class NavigationHandle extends View implements ButtonInterface {
     private final float mShrinkWidthForAnimation;
     private boolean mRequiresInvalidate;
     private boolean mShrink;
-    private boolean mHideHandle;
-    private UserTracker mUserTracker;
-    private final ContentObserver mHandleSettingsObserver =
-            new ContentObserver(new Handler(Looper.getMainLooper())) {
-                @Override
-                public void onChange(boolean selfChange) {
-                    updateHandleVisibility();
-                }
-            };
-    private final UserTracker.Callback mUserChangedCallback = new UserTracker.Callback() {
-        @Override
-        public void onUserChanged(int newUser, Context userContext) {
-            updateHandleVisibility();
-        }
-    };
 
     private ObjectAnimator mPulseAnimator = null;
     private float mPulseAnimationProgress;
@@ -114,56 +91,6 @@ public class NavigationHandle extends View implements ButtonInterface {
     }
 
     @Override
-    protected void onAttachedToWindow() {
-        super.onAttachedToWindow();
-        mUserTracker = Dependency.get(UserTracker.class);
-        getContext().getContentResolver().registerContentObserver(
-                Settings.Secure.getUriFor(Settings.Secure.UWU_HIDE_GESTURE_HANDLE),
-                false, mHandleSettingsObserver, UserHandle.USER_ALL);
-        getContext().getContentResolver().registerContentObserver(
-                Settings.Secure.getUriFor(Settings.Secure.NAVIGATION_MODE),
-                false, mHandleSettingsObserver, UserHandle.USER_ALL);
-        mUserTracker.addCallback(mUserChangedCallback, getContext().getMainExecutor());
-        updateHandleVisibility();
-    }
-
-    @Override
-    protected void onDetachedFromWindow() {
-        getContext().getContentResolver().unregisterContentObserver(mHandleSettingsObserver);
-        if (mUserTracker != null) {
-            mUserTracker.removeCallback(mUserChangedCallback);
-        }
-        mUserTracker = null;
-        super.onDetachedFromWindow();
-    }
-
-    @Override
-    protected void onConfigurationChanged(Configuration newConfig) {
-        super.onConfigurationChanged(newConfig);
-        updateHandleVisibility();
-    }
-
-    private void updateHandleVisibility() {
-        if (mUserTracker == null) return;
-        int userId = mUserTracker.getUserId();
-        int navigationMode = Settings.Secure.getIntForUser(getContext().getContentResolver(),
-                Settings.Secure.NAVIGATION_MODE, getResources().getInteger(
-                        com.android.internal.R.integer.config_navBarInteractionMode), userId);
-        int hideHandle = Settings.Secure.getIntForUser(getContext().getContentResolver(),
-                Settings.Secure.UWU_HIDE_GESTURE_HANDLE, 0, userId);
-        mHideHandle = shouldHideHandle(navigationMode, hideHandle);
-        invalidate();
-    }
-
-    static boolean shouldHideHandle(int navigationMode, int hideHandle) {
-        return navigationMode == 2 && hideHandle == 1;
-    }
-
-    protected boolean isHandleHidden() {
-        return mHideHandle;
-    }
-
-    @Override
     public void setAlpha(float alpha) {
         super.setAlpha(alpha);
         if (alpha > 0f && mRequiresInvalidate) {
@@ -175,9 +102,6 @@ public class NavigationHandle extends View implements ButtonInterface {
     @Override
     protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
-
-        // Keep the touch target and gesture geometry intact; only suppress the painted handle.
-        if (isHandleHidden()) return;
 
         // Draw that bar
         int navHeight = getHeight();
