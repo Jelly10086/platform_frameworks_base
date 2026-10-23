@@ -13426,14 +13426,6 @@ public final class Settings {
         public static final String NAVIGATIONBAR_KEY_ORDER = "navigationbar_key_order";
 
         /**
-         * Hides the gesture navigation handle without changing gestures or navigation insets.
-         * <p>Type: int (0 for visible by default, 1 for hidden). Ignored in button navigation.
-         * @hide
-         */
-        @Readable
-        public static final String UWU_HIDE_GESTURE_HANDLE = "uwu_hide_gesture_handle";
-
-        /**
          * Whether Moment, including its launch and gesture entry points, is enabled.
          * <p>Type: int (0 for false, 1 for true)
          *
