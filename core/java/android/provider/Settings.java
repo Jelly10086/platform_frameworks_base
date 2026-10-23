@@ -16311,6 +16311,16 @@ public final class Settings {
         public static final String PACKAGE_VERIFIER_INCLUDE_ADB = "verifier_verify_adb_installs";
 
         /**
+         * Skip package verification when updating a preinstalled system package.
+         * 1 = skip package verification for system package updates
+         * 0 = perform package verification (default)
+         * @hide
+         */
+        @Readable
+        public static final String PACKAGE_VERIFIER_SKIP_SYSTEM_PACKAGE_UPDATES =
+                "verifier_skip_system_package_updates";
+
+        /**
          * Run integrity checks for integrity rule providers.
          * 0 = bypass integrity verification on installs from rule providers (default)
          * 1 = perform integrity verification on installs from rule providers

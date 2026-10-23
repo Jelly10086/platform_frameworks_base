@@ -67,6 +67,7 @@ import android.util.Pair;
 import android.util.Slog;
 
 import com.android.server.DeviceIdleInternal;
+import com.android.server.pm.pkg.PackageStateInternal;
 import com.android.server.sdksandbox.SdkSandboxManagerLocal;
 
 import java.io.File;
@@ -618,6 +619,24 @@ final class VerifyingSession {
         } else if (requestedDisableVerification) {
             // Skip verification for non-adb installs
             return false;
+        }
+
+        // Skip verification for updates to preinstalled system packages only when explicitly
+        // enabled. New installs and ADB installs continue through their existing verification
+        // paths. Respect device policy requiring app verification.
+        if (!mPm.isUserRestricted(userId, UserManager.ENSURE_VERIFY_APPS)
+                && android.provider.Settings.Global.getInt(mPm.mContext.getContentResolver(),
+                android.provider.Settings.Global.PACKAGE_VERIFIER_SKIP_SYSTEM_PACKAGE_UPDATES,
+                0) != 0) {
+            final PackageStateInternal packageState = mPm.snapshotComputer()
+                    .getPackageStateInternal(pkgInfoLite.packageName);
+            if (packageState != null && packageState.isSystem()) {
+                if (DEBUG_VERIFY) {
+                    Slog.i(TAG, "Skip verification for system package update: "
+                            + pkgInfoLite.packageName);
+                }
+                return false;
+            }
         }
 
         // only when not installed from ADB, skip verification for instant apps when
