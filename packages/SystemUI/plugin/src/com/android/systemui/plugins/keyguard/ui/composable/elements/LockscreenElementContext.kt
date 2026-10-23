@@ -31,4 +31,7 @@ data class LockscreenElementContext(
 
     /** Modifier to apply to elements that should be hidden when only showing authUI when dozing */
     val nonAuthUI: Modifier = Modifier,
+
+    /** Enforces where the clock renders at any time. Hack for dual shade. */
+    val clockPriority: Int = 0,
 )

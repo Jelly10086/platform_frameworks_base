@@ -54,6 +54,7 @@ import com.android.systemui.notifications.intelligence.rules.shared.NmContextual
 import com.android.systemui.notifications.intelligence.rules.ui.viewmodel.NotificationRulesParentViewModel
 import com.android.systemui.notifications.ui.viewmodel.NotificationsShadeOverlayActionsViewModel
 import com.android.systemui.notifications.ui.viewmodel.NotificationsShadeOverlayContentViewModel
+import com.android.systemui.plugins.keyguard.ui.composable.elements.LockscreenElementContext
 import com.android.systemui.plugins.keyguard.ui.composable.elements.LockscreenElementKeys
 import com.android.systemui.res.R
 import com.android.systemui.scene.session.ui.composable.SaveableSession
@@ -189,8 +190,9 @@ constructor(
                     ) {
                         with(lockscreenElements) {
                             LockscreenElement(
-                                LockscreenElementKeys.Clock.Small,
+                                LockscreenElementKeys.Clock.Shade,
                                 Modifier.height(88.dp),
+                                LockscreenElementContext(clockPriority = 1),
                             )
                         }
                     }

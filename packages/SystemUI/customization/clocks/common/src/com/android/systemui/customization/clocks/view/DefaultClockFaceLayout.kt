@@ -19,7 +19,6 @@ package com.android.systemui.customization.clocks.view
 import android.content.Context
 import android.util.DisplayMetrics
 import android.view.View
-import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.TextView
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -36,6 +35,7 @@ import androidx.constraintlayout.widget.ConstraintSet.START
 import androidx.constraintlayout.widget.ConstraintSet.TOP
 import androidx.constraintlayout.widget.ConstraintSet.WRAP_CONTENT
 import com.android.compose.animation.scene.MovableElementContentScope
+import com.android.compose.animation.scene.MovableElementKey
 import com.android.systemui.customization.clocks.R as clocksR
 import com.android.systemui.customization.clocks.utils.ContextUtils.getSafeStatusBarHeight
 import com.android.systemui.plugins.keyguard.ui.clocks.AodClockBurnInModel
@@ -58,12 +58,15 @@ open class DefaultClockFaceLayout(val view: View) : ClockFaceLayout {
         if (view.id == ClockViewIds.LOCKSCREEN_CLOCK_VIEW_LARGE) {
             listOf(LargeClockElement())
         } else {
-            listOf(SmallClockElement())
+            listOf(
+                SmallClockElement(LockscreenElementKeys.Clock.Small),
+                SmallClockElement(LockscreenElementKeys.Clock.Shade),
+            )
         }
     }
 
-    private inner class SmallClockElement : MovableLockscreenElement {
-        override val key = LockscreenElementKeys.Clock.Small
+    private inner class SmallClockElement(override val key: MovableElementKey) :
+        MovableLockscreenElement {
         override val context: Context = view.context
         override val source = ElementSource.DYNAMIC
 
@@ -88,6 +91,7 @@ open class DefaultClockFaceLayout(val view: View) : ClockFaceLayout {
                     .then(contentScope.smallClockModifier())
                     .burnInAware(isClock = true)
                     .nonAuthUI(),
+                context.clockPriority,
             )
         }
     }
@@ -110,24 +114,59 @@ open class DefaultClockFaceLayout(val view: View) : ClockFaceLayout {
     }
 
     companion object {
+        private class ClockParent(
+            ctx: Context,
+            private val priority: Int,
+            private val targetView: View?,
+        ) : FrameLayout(ctx) {
+            val targetListener =
+                object : View.OnAttachStateChangeListener {
+                    override fun onViewAttachedToWindow(view: View) = checkParent(view)
+
+                    override fun onViewDetachedFromWindow(view: View) {
+                        // A detach callback runs before ViewGroup.removeView() has cleared the
+                        // current parent. Defer arbitration to avoid recursively removing the
+                        // same view from that parent.
+                        view.post { checkParent(view) }
+                    }
+                }
+
+            private fun checkParent(view: View) {
+                if (!isAttachedToWindow) return
+
+                val currentParent = view.parent as? ClockParent
+                if (currentParent == null || currentParent.priority < priority) {
+                    currentParent?.removeView(view)
+                    addView(view)
+                }
+            }
+
+            override fun onAttachedToWindow() {
+                super.onAttachedToWindow()
+                targetView?.let { view ->
+                    view.addOnAttachStateChangeListener(targetListener)
+                    checkParent(view)
+                }
+            }
+
+            override fun onDetachedFromWindow() {
+                super.onDetachedFromWindow()
+                targetView?.removeOnAttachStateChangeListener(targetListener)
+                removeAllViews()
+            }
+        }
+
         @Composable
-        fun ClockView(view: View?, modifier: Modifier = Modifier) {
+        fun ClockView(view: View?, modifier: Modifier = Modifier, priority: Int = 0) {
             AndroidView(
                 factory = {
-                    FrameLayout(it).apply {
+                    ClockParent(it, priority, view).apply {
                         // Clip nothing. The clock views at times render outside their bounds.
                         // Compose does not clip by default, so only this layer needs clipping
                         // to be explicitly disabled.
                         clipChildren = false
                         clipToPadding = false
                     }
-                },
-                update = { parent ->
-                    view?.let {
-                        parent.removeAllViews()
-                        (view.parent as? ViewGroup)?.removeView(view)
-                        parent.addView(view)
-                    } ?: run { parent.removeAllViews() }
                 },
                 modifier = modifier,
             )

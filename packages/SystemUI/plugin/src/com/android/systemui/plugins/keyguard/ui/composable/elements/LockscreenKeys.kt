@@ -156,6 +156,7 @@ object LockscreenElementKeys {
     object Clock {
         val Large = MovableElementKey("LargeClock", ContentPicker)
         val Small = MovableElementKey("SmallClock", ContentPicker)
+        val Shade = MovableElementKey("ShadeClock", ContentPicker)
     }
 
     /** Smartspace provided lockscreen elements */
