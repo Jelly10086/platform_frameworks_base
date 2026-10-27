@@ -119,6 +119,21 @@ The system will end the boot animation (first completing any incomplete or even 
 parts that are of type `c`) when the system is finished booting. (This is accomplished by setting
 the system property `service.bootanim.exit` to a nonzero string.)
 
+### Exit zoom
+
+An animation can opt into a white, screen-filling exit with this additional line in `desc.txt`:
+
+    exit_zoom DURATION_MS INNER_RADIUS
+
+`DURATION_MS` is the duration in milliseconds, from 1 to 5000. `INNER_RADIUS` is the radius,
+in animation pixels, of a fully covered circle centered on the animation canvas. Every frame
+must contain this circle. On exit, the player freezes the currently displayed interruptible
+frame and scales it until that circle covers the display corners. A short anticipation of up to
+230 ms enlarges the shape by 20% and blends it 23% toward white, then
+`cubic-bezier(0.15, 1, 0, 0.79)` drives the expansion and transition to white. Anticipation is capped at 20%
+of the configured duration and is included in that duration.
+Shutdown animations retain their normal exit behavior.
+
 ## protips
 
 ### PNG compression

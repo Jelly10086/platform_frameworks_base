@@ -19,6 +19,8 @@
 #define LOG_TAG "BootAnimation"
 #define ATRACE_TAG ATRACE_TAG_GRAPHICS
 
+#include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <vector>
 
@@ -117,6 +119,7 @@ static constexpr size_t TEXT_POS_LEN_MAX = 16;
 static const int DYNAMIC_COLOR_COUNT = 4;
 static const char U_TEXTURE[] = "uTexture";
 static const char U_FADE[] = "uFade";
+static const char U_WHITEN[] = "uWhiten";
 static const char U_CROP_AREA[] = "uCropArea";
 static const char U_START_COLOR_PREFIX[] = "uStartColor";
 static const char U_END_COLOR_PREFIX[] = "uEndColor";
@@ -739,6 +742,7 @@ void BootAnimation::initShaders() {
     GLint uvLocation = glGetAttribLocation(mImageShader, A_UV);
     mImageTextureLocation = glGetUniformLocation(mImageShader, U_TEXTURE);
     mImageFadeLocation = glGetUniformLocation(mImageShader, U_FADE);
+    mImageWhitenLocation = glGetUniformLocation(mImageShader, U_WHITEN);
     glEnableVertexAttribArray(positionLocation);
     glVertexAttribPointer(positionLocation, 2,  GL_FLOAT, GL_FALSE, 0, quadPositions);
     glVertexAttribPointer(uvLocation, 2, GL_FLOAT, GL_FALSE, 0, quadUVs);
@@ -1114,6 +1118,8 @@ bool BootAnimation::parseAnimationDesc(Animation& animation)  {
         int pause = 0;
         int progress = 0;
         int framesToFadeCount = 0;
+        int exitZoomDurationMs = 0;
+        float exitZoomRadius = 0;
         int colorTransitionStart = 0;
         int colorTransitionEnd = 0;
         char path[ANIM_ENTRY_NAME_MAX];
@@ -1158,6 +1164,15 @@ bool BootAnimation::parseAnimationDesc(Animation& animation)  {
             animation.colorTransitionStart = colorTransitionStart;
             animation.colorTransitionEnd = colorTransitionEnd;
             dynamicColoringPartName = std::string(dynamicColoringPartNameBuffer);
+        } else if (sscanf(l, "exit_zoom %d %f", &exitZoomDurationMs, &exitZoomRadius) == 2) {
+            if (exitZoomDurationMs > 0 && exitZoomDurationMs <= 5000 &&
+                std::isfinite(exitZoomRadius) && exitZoomRadius > 0 &&
+                exitZoomRadius <= fmin(animation.width, animation.height) / 2.0f) {
+                animation.exitZoomDurationMs = exitZoomDurationMs;
+                animation.exitZoomRadius = exitZoomRadius;
+            } else {
+                SLOGE("Invalid exit zoom: %s", l);
+            }
         } else if (sscanf(l, "%c %d %d %" STRTO(ANIM_PATH_MAX) "s%n",
                           &pathType, &count, &pause, path, &nextReadPos) >= 4) {
             if (pathType == 'f') {
@@ -1482,6 +1497,96 @@ void BootAnimation::initDynamicColors() {
     mImageColorProgressLocation = glGetUniformLocation(mImageShader, U_COLOR_PROGRESS);
 }
 
+// Exit expansion uses cubic-bezier(0.15, 1, 0, 0.79).
+static float exitExpansionProgress(float progress) {
+    auto cubic = [](float t, float p0, float p1, float p2, float p3) {
+        const float u = 1.0f - t;
+        return u * u * u * p0 + 3 * u * u * t * p1 + 3 * u * t * t * p2 + t * t * t * p3;
+    };
+    if (progress <= 0.0f) return 0.0f;
+    if (progress >= 1.0f) return 1.0f;
+    float low = 0.0f;
+    float high = 1.0f;
+    for (int i = 0; i < 16; i++) {
+        const float t = (low + high) / 2.0f;
+        if (cubic(t, 0.0f, 0.15f, 0.0f, 1.0f) < progress) {
+            low = t;
+        } else {
+            high = t;
+        }
+    }
+    return cubic((low + high) / 2.0f, 0.0f, 1.0f, 0.79f, 1.0f);
+}
+
+void BootAnimation::playExitZoom(const Animation& animation, const Animation::Frame& frame,
+                                 GLuint texture, float colorProgress) {
+    ATRACE_CALL();
+    const nsecs_t duration = ms2ns(animation.exitZoomDurationMs);
+    const nsecs_t frameDuration = s2ns(1) / animation.fps;
+    const nsecs_t start = systemTime();
+    nsecs_t nextFrame = start;
+    for (;;) {
+        processDisplayEvents();
+        const float progress = fmin(static_cast<double>(systemTime() - start) / duration, 1.0);
+        // Anticipation and expansion share the configured exit duration.
+        const float anticipationFraction = fmin(230.0f / animation.exitZoomDurationMs, 0.2f);
+        const float anticipation = fmin(progress / anticipationFraction, 1.0f);
+        const float charge = anticipation * anticipation * (3.0f - 2.0f * anticipation);
+        const float expansion = exitExpansionProgress(
+                fmax((progress - anticipationFraction) / (1.0f - anticipationFraction), 0.0f));
+        const float whiten = 0.23f * charge + 0.77f * expansion;
+        for (const auto& display : mDisplays) {
+            eglMakeCurrent(mEgl, display.eglSurface, display.eglSurface, mEglContext);
+            const double ratioW = static_cast<double>(display.width) / display.initWidth;
+            const double ratioH = static_cast<double>(display.height) / display.initHeight;
+            const float centerX = display.width / 2.0f;
+            const float centerY = display.height / 2.0f;
+            // The configured inner circle must cover every corner, including non-square displays.
+            const float finalScale = fmax(1.0, 1.02 * hypot(centerX / ratioW, centerY / ratioH) /
+                                                       animation.exitZoomRadius);
+            const float anticipationScale = fmin(0.2f, finalScale - 1.0f);
+            const float scale = 1.0f + anticipationScale * charge +
+                    (finalScale - 1.0f - anticipationScale) * expansion;
+            // Match the main player's integer placement before applying the zoom.
+            const int animationX = (display.width - animation.width * ratioW) / 2;
+            const int animationY = (display.height - animation.height * ratioH) / 2;
+            const int width = frame.trimWidth * ratioW;
+            const int height = frame.trimHeight * ratioH;
+            const int left = animationX + static_cast<int>(frame.trimX * ratioW);
+            const int bottom = display.height -
+                    (animationY + static_cast<int>(frame.trimY * ratioH) + height);
+            projectSceneToWindow(display);
+            handleViewport(frameDuration, display);
+            glClear(GL_COLOR_BUFFER_BIT);
+            glUseProgram(mImageShader);
+            glBindTexture(GL_TEXTURE_2D, texture);
+            glUniform1i(mImageTextureLocation, 0);
+            glUniform1f(mImageFadeLocation, 0.0f);
+            glUniform1f(mImageWhitenLocation, whiten);
+            if (animation.dynamicColoringEnabled) {
+                glUniform1f(mImageColorProgressLocation, colorProgress);
+            }
+            glEnable(GL_BLEND);
+            drawTexturedQuad(centerX + (left - centerX) * scale,
+                             centerY + (bottom - centerY) * scale,
+                             width * scale, height * scale, display);
+            glDisable(GL_BLEND);
+            eglSwapBuffers(mEgl, display.eglSurface);
+        }
+        if (progress >= 1.0f) break;
+        // Skip missed deadlines instead of drawing catch-up frames after a slow swap.
+        const nsecs_t now = systemTime();
+        nextFrame += ((now - nextFrame) / frameDuration + 1) * frameDuration;
+        nextFrame = std::min(nextFrame, start + duration);
+        struct timespec deadline = {nextFrame / 1000000000, nextFrame % 1000000000};
+        int err;
+        do {
+            err = clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &deadline, nullptr);
+        } while (err == EINTR);
+    }
+    glUniform1f(mImageWhitenLocation, 0.0f);
+}
+
 bool BootAnimation::playAnimation(const Animation& animation) {
     ATRACE_CALL();
     const size_t numParts = animation.parts.size();
@@ -1494,7 +1599,9 @@ bool BootAnimation::playAnimation(const Animation& animation) {
     int lastDisplayedProgress = 0;
     int colorTransitionStart = animation.colorTransitionStart;
     int colorTransitionEnd = animation.colorTransitionEnd;
-    for (size_t partIdx = 0; partIdx < numParts; partIdx++) {
+    bool exitZoomPlayed = false;
+    const bool exitZoomEnabled = animation.exitZoomDurationMs > 0 && !mShuttingDown;
+    for (size_t partIdx = 0; partIdx < numParts && !exitZoomPlayed; partIdx++) {
         const Animation::Part& part(animation.parts[partIdx]);
         const size_t numFramesInPart = part.frames.size();
         glBindTexture(GL_TEXTURE_2D, 0);
@@ -1577,6 +1684,10 @@ bool BootAnimation::playAnimation(const Animation& animation) {
                     // Set decoding option to alpha unpremultiplied so that the R, G, B channels
                     // of transparent pixels are preserved.
                     initTexture(frame.map, &w, &h, false /* don't premultiply alpha */);
+                }
+                GLint frameTexture = 0;
+                if (exitZoomEnabled) {
+                    glGetIntegerv(GL_TEXTURE_BINDING_2D, &frameTexture);
                 }
 
                 float fade = 0;
@@ -1664,7 +1775,15 @@ bool BootAnimation::playAnimation(const Animation& animation) {
                 }
 
                 checkExit();
+                if (exitZoomEnabled && exitPending() && !part.playUntilComplete &&
+                    (lastDisplayedProgress == 0 || lastDisplayedProgress == 100)) {
+                    playExitZoom(animation, frame, frameTexture, colorProgress);
+                    exitZoomPlayed = true;
+                    break;
+                }
             }
+
+            if (exitZoomPlayed) break;
 
             int pauseDuration = part.pause * ns2us(frameDuration);
             while(pauseDuration > 0 && !exitPending()){
