@@ -70,7 +70,7 @@ public:
             int trimY;
             int trimWidth;
             int trimHeight;
-            mutable GLuint tid;
+            mutable GLuint tid = 0;
             bool operator < (const Frame& rhs) const {
                 return name < rhs.name;
             }
@@ -116,6 +116,9 @@ public:
         bool dynamicColoringEnabled = false;
         int colorTransitionStart = 0; // Start frame of dynamic color transition.
         int colorTransitionEnd = 0; // End frame of dynamic color transition.
+        int exitZoomDurationMs = 0;
+        // Radius of an opaque circle at the animation center, in animation pixels.
+        float exitZoomRadius = 0;
         float startColors[4][3]; // Start colors of dynamic color transition.
         float endColors[4][3];   // End colors of dynamic color transition.
     };
@@ -209,6 +212,8 @@ private:
     bool validClock(const Animation::Part& part);
     Animation* loadAnimation(const String8&);
     bool playAnimation(const Animation&);
+    void playExitZoom(const Animation&, const Animation::Frame&, GLuint texture,
+                      float colorProgress);
     void releaseAnimation(Animation*) const;
     bool parseAnimationDesc(Animation&);
     bool preloadZip(Animation &animation);
@@ -256,6 +261,7 @@ private:
     GLuint mImageShader;
     GLuint mTextShader;
     GLuint mImageFadeLocation;
+    GLint mImageWhitenLocation;
     GLuint mImageTextureLocation;
     GLuint mTextCropAreaLocation;
     GLuint mTextTextureLocation;
