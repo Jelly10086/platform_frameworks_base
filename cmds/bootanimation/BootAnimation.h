@@ -261,7 +261,8 @@ private:
     GLuint mImageShader;
     GLuint mTextShader;
     GLuint mImageFadeLocation;
-    GLint mImageWhitenLocation;
+    GLint mImageExitColorProgressLocation;
+    GLint mImageExitLuminanceLocation;
     GLuint mImageTextureLocation;
     GLuint mTextCropAreaLocation;
     GLuint mTextTextureLocation;

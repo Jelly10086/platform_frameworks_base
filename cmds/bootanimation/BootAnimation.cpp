@@ -110,6 +110,7 @@ static constexpr size_t FONT_NUM_ROWS = FONT_NUM_CHARS / FONT_NUM_COLS;
 static const int TEXT_CENTER_VALUE = INT_MAX;
 static const int TEXT_MISSING_VALUE = INT_MIN;
 static const char EXIT_PROP_NAME[] = "service.bootanim.exit";
+static const char DARK_THEME_PROP_NAME[] = "service.bootanim.dark_theme";
 static const char PROGRESS_PROP_NAME[] = "service.bootanim.progress";
 static const char CLOCK_ENABLED_PROP_NAME[] = "persist.sys.bootanim.clock.enabled";
 static const char DECODE_RGB565_PROP_NAME[] = "persist.sys.bootanim.decode.rgb565";
@@ -119,7 +120,8 @@ static constexpr size_t TEXT_POS_LEN_MAX = 16;
 static const int DYNAMIC_COLOR_COUNT = 4;
 static const char U_TEXTURE[] = "uTexture";
 static const char U_FADE[] = "uFade";
-static const char U_WHITEN[] = "uWhiten";
+static const char U_EXIT_COLOR_PROGRESS[] = "uExitColorProgress";
+static const char U_EXIT_LUMINANCE[] = "uExitLuminance";
 static const char U_CROP_AREA[] = "uCropArea";
 static const char U_START_COLOR_PREFIX[] = "uStartColor";
 static const char U_END_COLOR_PREFIX[] = "uEndColor";
@@ -742,7 +744,8 @@ void BootAnimation::initShaders() {
     GLint uvLocation = glGetAttribLocation(mImageShader, A_UV);
     mImageTextureLocation = glGetUniformLocation(mImageShader, U_TEXTURE);
     mImageFadeLocation = glGetUniformLocation(mImageShader, U_FADE);
-    mImageWhitenLocation = glGetUniformLocation(mImageShader, U_WHITEN);
+    mImageExitColorProgressLocation = glGetUniformLocation(mImageShader, U_EXIT_COLOR_PROGRESS);
+    mImageExitLuminanceLocation = glGetUniformLocation(mImageShader, U_EXIT_LUMINANCE);
     glEnableVertexAttribArray(positionLocation);
     glVertexAttribPointer(positionLocation, 2,  GL_FLOAT, GL_FALSE, 0, quadPositions);
     glVertexAttribPointer(uvLocation, 2, GL_FLOAT, GL_FALSE, 0, quadUVs);
@@ -1521,6 +1524,8 @@ static float exitExpansionProgress(float progress) {
 void BootAnimation::playExitZoom(const Animation& animation, const Animation::Frame& frame,
                                  GLuint texture, float colorProgress) {
     ATRACE_CALL();
+    const float exitLuminance = android::base::GetBoolProperty(DARK_THEME_PROP_NAME, false)
+            ? 0.0f : 1.0f;
     const nsecs_t duration = ms2ns(animation.exitZoomDurationMs);
     const nsecs_t frameDuration = s2ns(1) / animation.fps;
     const nsecs_t start = systemTime();
@@ -1534,7 +1539,7 @@ void BootAnimation::playExitZoom(const Animation& animation, const Animation::Fr
         const float charge = anticipation * anticipation * (3.0f - 2.0f * anticipation);
         const float expansion = exitExpansionProgress(
                 fmax((progress - anticipationFraction) / (1.0f - anticipationFraction), 0.0f));
-        const float whiten = 0.23f * charge + 0.77f * expansion;
+        const float exitColorProgress = 0.23f * charge + 0.77f * expansion;
         for (const auto& display : mDisplays) {
             eglMakeCurrent(mEgl, display.eglSurface, display.eglSurface, mEglContext);
             const double ratioW = static_cast<double>(display.width) / display.initWidth;
@@ -1562,7 +1567,8 @@ void BootAnimation::playExitZoom(const Animation& animation, const Animation::Fr
             glBindTexture(GL_TEXTURE_2D, texture);
             glUniform1i(mImageTextureLocation, 0);
             glUniform1f(mImageFadeLocation, 0.0f);
-            glUniform1f(mImageWhitenLocation, whiten);
+            glUniform1f(mImageExitColorProgressLocation, exitColorProgress);
+            glUniform1f(mImageExitLuminanceLocation, exitLuminance);
             if (animation.dynamicColoringEnabled) {
                 glUniform1f(mImageColorProgressLocation, colorProgress);
             }
@@ -1584,7 +1590,7 @@ void BootAnimation::playExitZoom(const Animation& animation, const Animation::Fr
             err = clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &deadline, nullptr);
         } while (err == EINTR);
     }
-    glUniform1f(mImageWhitenLocation, 0.0f);
+    glUniform1f(mImageExitColorProgressLocation, 0.0f);
 }
 
 bool BootAnimation::playAnimation(const Animation& animation) {

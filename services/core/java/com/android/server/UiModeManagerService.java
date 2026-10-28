@@ -141,6 +141,7 @@ final class UiModeManagerService extends SystemService {
     // Enable launching of applications when entering the dock.
     private static final boolean ENABLE_LAUNCH_DESK_DOCK_APP = true;
     private static final String SYSTEM_PROPERTY_DEVICE_THEME = "persist.sys.theme";
+    private static final String SYSTEM_PROPERTY_BOOTANIM_DARK_THEME = "service.bootanim.dark_theme";
     @VisibleForTesting
     public static final Set<Integer> SUPPORTED_NIGHT_MODE_CUSTOM_TYPES = new ArraySet(
             new Integer[]{MODE_NIGHT_CUSTOM_TYPE_SCHEDULE, MODE_NIGHT_CUSTOM_TYPE_BEDTIME});
@@ -2125,6 +2126,9 @@ final class UiModeManagerService extends SystemService {
     private void applyConfigurationExternallyLocked() {
         if (mSetUiMode != mConfiguration.uiMode) {
             mSetUiMode = mConfiguration.uiMode;
+            SystemProperties.set(SYSTEM_PROPERTY_BOOTANIM_DARK_THEME,
+                    Boolean.toString((mSetUiMode & Configuration.UI_MODE_NIGHT_MASK)
+                            == Configuration.UI_MODE_NIGHT_YES));
             // load splash screen instead of screenshot
             mWindowManager.clearSnapshotCache();
             try {

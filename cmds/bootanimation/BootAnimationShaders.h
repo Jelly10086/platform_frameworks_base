@@ -30,7 +30,8 @@ static const char IMAGE_FRAG_DYNAMIC_COLORING_SHADER_SOURCE[] = R"(
     const float cWhiteMaskThreshold = 0.05;
     uniform sampler2D uTexture;
     uniform float uFade;
-    uniform float uWhiten;
+    uniform float uExitColorProgress;
+    uniform float uExitLuminance;
     uniform float uColorProgress;
     uniform vec3 uStartColor0;
     uniform vec3 uStartColor1;
@@ -59,18 +60,19 @@ static const char IMAGE_FRAG_DYNAMIC_COLORING_SHADER_SOURCE[] = R"(
         color = mix(color, vec3((r + g + b + a) * 0.25), useWhiteMask);
         float coverage = mix(clamp(r + g + b + a, 0.0, 1.0),
                              (r + g + b + a) * 0.25, useWhiteMask);
-        color = mix(color, vec3(coverage), uWhiten);
+        color = mix(color, vec3(coverage * uExitLuminance), uExitColorProgress);
         gl_FragColor = vec4(color.x, color.y, color.z, (1.0 - uFade));
     })";
 static const char IMAGE_FRAG_SHADER_SOURCE[] = R"(
     precision mediump float;
     uniform sampler2D uTexture;
     uniform float uFade;
-    uniform float uWhiten;
+    uniform float uExitColorProgress;
+    uniform float uExitLuminance;
     varying highp vec2 vUv;
     void main() {
         vec4 color = texture2D(uTexture, vUv);
-        color.rgb = mix(color.rgb, vec3(1.0), uWhiten);
+        color.rgb = mix(color.rgb, vec3(uExitLuminance), uExitColorProgress);
         gl_FragColor = vec4(color.x, color.y, color.z, (1.0 - uFade)) * color.a;
     })";
 static const char TEXT_FRAG_SHADER_SOURCE[] = R"(
